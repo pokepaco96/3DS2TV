@@ -44,4 +44,10 @@ object Ipv4 {
         val mask = if (prefixLength == 0) 0 else (-1 shl (32 - prefixLength))
         return (toInt(oa) and mask) == (toInt(ob) and mask)
     }
+
+    /** Privacy mask for exported reports: 192.168.1.50 -> 192.168.x.x (non-IPs are returned unchanged). */
+    fun mask(text: String): String =
+        Regex("""\b(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}\b""").replace(text) { m ->
+            if (parse(m.value) != null) "${m.groupValues[1]}.${m.groupValues[2]}.x.x" else m.value
+        }
 }

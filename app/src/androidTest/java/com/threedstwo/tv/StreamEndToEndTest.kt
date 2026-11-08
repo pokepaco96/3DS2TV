@@ -163,8 +163,7 @@ class StreamEndToEndTest {
         startFakeConsole()
         val app = ThreeDsTvApp.of(ctx)
         app.saveSettings(AppSettings(consoleIp = "127.0.0.1", connectMode = ConnectMode.ACTIVE, inputRedirection = true, showHud = true))
-        // ensure prefs are flushed before the activity reads them
-        Thread.sleep(300)
+        // SharedPreferences.apply() updates the in-memory map synchronously: no wait needed.
         val intent = Intent(ctx, StreamActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         val activity = inst.startActivitySync(intent)
         try {
@@ -182,7 +181,8 @@ class StreamEndToEndTest {
             // Leave to another screen and come back (e.g. "Configurar mando…" from the in-session menu):
             // the pipeline must restart and frames must flow again.
             val help = inst.startActivitySync(Intent(ctx, HelpActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-            Thread.sleep(1500)
+            // StreamActivity must really go through onStop (pipeline torn down) before we come back.
+            assertTrue("stream stopped behind Help", waitFor(10000) { SessionProbe.state == ConnectionState.DISCONNECTED })
             help.finish()
             val before = SessionProbe.presentedFrames
             val commandsBefore = commands.size
@@ -193,6 +193,18 @@ class StreamEndToEndTest {
         } finally {
             activity.finish()
         }
-        assertTrue(waitFor(5000) { SessionProbe.state == ConnectionState.DISCONNECTED || !running })
+        assertTrue("disconnected after finish", waitFor(10000) { SessionProbe.state == ConnectionState.DISCONNECTED })
+    }
+
+    @Test fun appIsAnAndroidTvLauncherAppWithBanner() {
+        val pm = ctx.packageManager
+        val leanback = pm.getLeanbackLaunchIntentForPackage(ctx.packageName)
+        assertTrue("LEANBACK_LAUNCHER intent", leanback != null)
+        assertEquals(MainActivity::class.java.name, leanback!!.component!!.className)
+        val info = pm.getApplicationInfo(ctx.packageName, 0)
+        assertTrue("banner declared", info.banner != 0)
+        assertTrue("touchscreen not required",
+            pm.getPackageInfo(ctx.packageName, android.content.pm.PackageManager.GET_CONFIGURATIONS)
+                .reqFeatures.orEmpty().none { it.name == "android.hardware.touchscreen" && (it.flags and android.content.pm.FeatureInfo.FLAG_REQUIRED) != 0 })
     }
 }

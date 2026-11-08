@@ -16,6 +16,7 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0"
+        buildConfigField("String", "GIT_COMMIT", "\"${gitCommit()}\"")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -24,6 +25,10 @@ android {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
         }
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     compileOptions {
@@ -57,4 +62,16 @@ dependencies {
     androidTestImplementation(libs.junit)
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.ext.junit)
+}
+
+/** Commit embedded in the APK for diagnostics: GITHUB_SHA in CI, `git rev-parse` locally, "unknown" otherwise. */
+fun gitCommit(): String {
+    System.getenv("GITHUB_SHA")?.takeIf { it.length >= 7 }?.let { return it.take(12) }
+    return try {
+        val p = ProcessBuilder("git", "rev-parse", "--short=12", "HEAD").directory(rootDir).redirectErrorStream(true).start()
+        val out = p.inputStream.bufferedReader().readText().trim()
+        if (p.waitFor() == 0 && out.matches(Regex("[0-9a-f]{7,40}"))) out else "unknown"
+    } catch (e: Exception) {
+        "unknown"
+    }
 }

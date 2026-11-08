@@ -91,10 +91,12 @@ class MainActivity : Activity() {
         val local = NetworkInfo.local(this)
         info.text = buildString {
             if (local == null) {
-                append("Sin red. Conecta el Chromecast a la misma red que la 3DS.")
+                append("Sin red Wi-Fi/Ethernet. Conecta el Chromecast a la misma red que la 3DS.")
             } else {
-                append("Este dispositivo: ${local.ip}/${local.prefixLength} (${local.transport})\n")
+                append("IP de este dispositivo (Viewer IP para NTR-HR): ${local.ip}/${local.prefixLength} (${local.transport})\n")
+                append("Consola: ${s.consoleIp.ifBlank { "—" }} · vídeo JPEG Compat por UDP ${s.viewerPort}\n")
                 append("Puertos: TCP 8000 → consola, UDP ${s.viewerPort} ← vídeo, UDP 4950 → mandos\n")
+                append("Reliable Stream / Lossless de NTR-HR: no soportados (elige JPEG UDP)\n")
                 append("Input Redirection: ${if (s.inputRedirection) "activado (actívalo también en Rosalina)" else "desactivado"}")
             }
         }

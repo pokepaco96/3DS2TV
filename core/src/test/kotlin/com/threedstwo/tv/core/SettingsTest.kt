@@ -57,4 +57,9 @@ class SettingsTest {
         assertFalse(Ipv4.sameSubnet("192.168.1.20", "192.168.2.30", 24))
         assertTrue(Ipv4.isPrivate("10.0.0.5"))
     }
+
+    @Test fun ipMaskingForReports() {
+        assertEquals("consola 192.168.x.x, tv 10.0.x.x:8001", Ipv4.mask("consola 192.168.1.50, tv 10.0.0.7:8001"))
+        assertEquals("versión 0.1.0 build 999.1", Ipv4.mask("versión 0.1.0 build 999.1"))
+    }
 }

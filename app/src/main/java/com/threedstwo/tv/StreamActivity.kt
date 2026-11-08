@@ -37,7 +37,10 @@ import com.threedstwo.tv.core.ntr.PacketKind
 import com.threedstwo.tv.core.ntr.Screen
 import com.threedstwo.tv.core.ntr.VideoFrameInfo
 import com.threedstwo.tv.core.session.ConnectMode
+import com.threedstwo.tv.core.session.CheckItem
+import com.threedstwo.tv.core.session.ConnectionChecklist
 import com.threedstwo.tv.core.session.ConnectionState
+import com.threedstwo.tv.core.session.SessionDiagnostics
 import com.threedstwo.tv.core.session.NtrSession
 import com.threedstwo.tv.core.session.RateMeter
 import com.threedstwo.tv.core.session.SessionConfig
@@ -405,7 +408,29 @@ class StreamActivity : Activity(), NtrSession.Listener, InputManager.InputDevice
                 NetworkInfo.local(this@StreamActivity)?.let { append("\n\nViewer IP para NTR-HR: ${it.ip}  ·  puerto ${settings.viewerPort}") }
             }
         }
-        if (!menuVisible) statusPanel.getChildAt(1)?.requestFocus()
+        statusText.append("\n\n" + ConnectionChecklist.format(checklist()))
+        if (!menuVisible && statusPanel.findFocus() == null) statusPanel.getChildAt(1)?.requestFocus()
+    }
+
+    private fun checklist(): List<CheckItem> {
+        val s = session
+        return ConnectionChecklist.evaluate(
+            ConnectionChecklist.Inputs(
+                mode = settings.connectMode,
+                state = s?.state ?: ConnectionState.DISCONNECTED,
+                diag = s?.diagnostics ?: SessionDiagnostics(),
+                framesCompleted = s?.assemblerStats?.framesCompleted ?: 0,
+                recentFrames = s?.state == ConnectionState.STREAMING,
+                framesPresented = renderer.presentedFrames,
+                inputRedirectionEnabled = settings.inputRedirection,
+                inputRedirectionTarget = sender?.consoleAddress,
+                unsupported = when (s?.unsupportedKind) {
+                    PacketKind.RELIABLE_STREAM -> "Reliable Stream (no soportado): en NTR-HR elige JPEG UDP"
+                    PacketKind.VIDEO_LOSSLESS -> "Lossless/Uncompressed (no soportado): en NTR-HR elige JPEG UDP"
+                    else -> null
+                },
+            ),
+        )
     }
 
     // ------------------------------------------------------------------ input
@@ -627,7 +652,7 @@ class StreamActivity : Activity(), NtrSession.Listener, InputManager.InputDevice
             !settings.inputRedirection -> "desactivado"
             sender == null -> "sin IP de consola"
             sender?.lastError != null -> "error: ${sender?.lastError}"
-            else -> "→ ${sender?.consoleAddress}:4950 · ${sender?.packetsSent} paquetes" + if (cursorMode) " · cursor táctil" else ""
+            else -> "→ ${sender?.consoleAddress}:4950 · ${sender?.packetsSent} enviados (UDP sin confirmación)" + if (cursorMode) " · cursor táctil" else ""
         }
         val controller = tracker.activeDeviceName ?: "ninguno activo (pulsa un botón)"
         val transport = when (s?.unsupportedKind) {
@@ -663,7 +688,9 @@ class StreamActivity : Activity(), NtrSession.Listener, InputManager.InputDevice
             SessionProbe.decodedFrames = decoder?.decoded ?: 0
             SessionProbe.decodeErrors = decoder?.errors ?: 0
             SessionProbe.surfaceWidth = surface.width
-            if (settings.showHud) hud.text = formatStats(st)
+            if (settings.showHud) hud.text = formatStats(st) + "\n\n" + ConnectionChecklist.format(checklist())
+            // keep the checklist in the status panel live while not streaming
+            if (statusPanel.visibility == View.VISIBLE) session?.let { renderState(it.state, it.stateDetail) }
             main.postDelayed(this, 500)
         }
     }
