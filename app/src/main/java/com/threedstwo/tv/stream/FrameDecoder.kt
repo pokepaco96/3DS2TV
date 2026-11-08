@@ -38,9 +38,10 @@ class FrameDecoder(
         }
     }
 
+    /** Stops the thread; the mailbox stays usable so a new decoder can be started (activity restart). */
     fun stop() {
         running = false
-        mailbox.close()
+        mailbox.wakeUp()
         thread?.join(1000)
     }
 

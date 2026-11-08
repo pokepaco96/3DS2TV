@@ -85,41 +85,48 @@ class StreamEndToEndTest {
         srv.bind(InetSocketAddress(InetAddress.getByName("127.0.0.1"), NtrConstants.CONTROL_PORT))
         server = srv
         val udp = DatagramSocket()
+        val target = java.util.concurrent.atomic.AtomicReference<InetSocketAddress?>(null)
         spawn {
-            try {
-                val sock = srv.accept()
-                val input = sock.getInputStream()
-                val out = sock.getOutputStream()
-                val hdr = ByteArray(NtrConstants.TCP_HEADER_SIZE)
-                var target: InetSocketAddress? = null
-                spawn {
-                    var frame = 0
-                    while (running) {
-                        val t = target
-                        if (t != null) {
-                            for (sc in Screen.entries) {
-                                for (p in JpegPacketizer.packetize(jpeg(sc, frame), sc, frame and 0xFF)) {
-                                    udp.send(DatagramPacket(p, p.size, t))
-                                }
-                            }
-                            frame++
+            var frame = 0
+            while (running) {
+                val t = target.get()
+                if (t != null) {
+                    for (sc in Screen.entries) {
+                        for (p in JpegPacketizer.packetize(jpeg(sc, frame), sc, frame and 0xFF)) {
+                            try { udp.send(DatagramPacket(p, p.size, t)) } catch (_: Exception) {}
                         }
-                        Thread.sleep(33)
+                    }
+                    frame++
+                }
+                Thread.sleep(33)
+            }
+        }
+        spawn {
+            // NTR-HR accepts a new control connection each time the viewer reconnects.
+            while (running) {
+                val sock = try { srv.accept() } catch (_: Exception) { break }
+                spawn {
+                    try {
+                        val input = sock.getInputStream()
+                        val out = sock.getOutputStream()
+                        val hdr = ByteArray(NtrConstants.TCP_HEADER_SIZE)
+                        while (running) {
+                            readFully(input, hdr)
+                            val p = NtrControlPacket.decode(hdr)
+                            if (p.dataLen > 0) readFully(input, ByteArray(p.dataLen))
+                            if (p.cmd == NtrConstants.CMD_REMOTE_PLAY) {
+                                commands += p.args
+                                target.set(InetSocketAddress(sock.inetAddress, p.args[4] and 0xFFFF))
+                            } else {
+                                out.write(NtrControlPacket(seq = p.seq, type = 0, cmd = 0).encode())
+                                out.flush()
+                            }
+                        }
+                    } catch (_: Exception) {
+                    } finally {
+                        try { sock.close() } catch (_: Exception) {}
                     }
                 }
-                while (running) {
-                    readFully(input, hdr)
-                    val p = NtrControlPacket.decode(hdr)
-                    if (p.dataLen > 0) readFully(input, ByteArray(p.dataLen))
-                    if (p.cmd == NtrConstants.CMD_REMOTE_PLAY) {
-                        commands += p.args
-                        target = InetSocketAddress(sock.inetAddress, p.args[4] and 0xFFFF)
-                    } else {
-                        out.write(NtrControlPacket(seq = p.seq, type = 0, cmd = 0).encode())
-                        out.flush()
-                    }
-                }
-            } catch (_: Exception) {
             }
         }
         val ir = DatagramSocket(InetSocketAddress(InetAddress.getByName("127.0.0.1"), InputFrame.PORT))
@@ -171,6 +178,18 @@ class StreamEndToEndTest {
             assertEquals(NtrConstants.DEFAULT_VIEWER_PORT, cmd[4])
             // Input redirection keep-alive reaches the console address with the neutral state
             assertTrue("input packets: ${inputPackets.get()}", waitFor(5000) { inputNeutral.get() > 10 })
+
+            // Leave to another screen and come back (e.g. "Configurar mando…" from the in-session menu):
+            // the pipeline must restart and frames must flow again.
+            val help = inst.startActivitySync(Intent(ctx, HelpActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            Thread.sleep(1500)
+            help.finish()
+            val before = SessionProbe.presentedFrames
+            val commandsBefore = commands.size
+            assertTrue("streaming again after resume", waitFor(30000) {
+                SessionProbe.state == ConnectionState.STREAMING && SessionProbe.presentedFrames > before + 30
+            })
+            assertTrue(commands.size > commandsBefore)
         } finally {
             activity.finish()
         }

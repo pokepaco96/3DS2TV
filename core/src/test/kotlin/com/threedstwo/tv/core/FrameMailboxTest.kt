@@ -44,4 +44,15 @@ class FrameMailboxTest {
         assertEquals(11, mb.take(10)!!.info.frameId)
         mb.release(held)
     }
+
+    @Test fun wakeUpDoesNotCloseTheMailbox() {
+        val mb = FrameMailbox(64)
+        val t = Thread { assertNull(mb.take(5000)) }
+        t.start()
+        Thread.sleep(50)
+        mb.wakeUp()
+        t.join(1000)
+        mb.offer(info(Screen.BOTTOM, 7), ByteArray(4), 4)
+        assertEquals(7, mb.take(100)!!.info.frameId)
+    }
 }

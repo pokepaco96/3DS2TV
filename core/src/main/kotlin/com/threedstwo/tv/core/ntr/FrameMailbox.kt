@@ -25,6 +25,7 @@ class FrameMailbox(private val bufferCapacity: Int = NtrConstants.MAX_PACKETS_PE
     private var pendingSeq = LongArray(Screen.entries.size)
     private var seq = 0L
     private var closed = false
+    private var wakeRequested = false
 
     @Volatile var droppedBeforeDecode = 0L
         private set
@@ -71,6 +72,10 @@ class FrameMailbox(private val bufferCapacity: Int = NtrConstants.MAX_PACKETS_PE
                     pending[best] = null
                     return f
                 }
+                if (wakeRequested) {
+                    wakeRequested = false
+                    return null
+                }
                 val remaining = deadline - System.currentTimeMillis()
                 if (remaining <= 0) return null
                 lock.wait(remaining)
@@ -89,6 +94,14 @@ class FrameMailbox(private val bufferCapacity: Int = NtrConstants.MAX_PACKETS_PE
                 pending[i]?.let { free.addLast(it) }
                 pending[i] = null
             }
+        }
+    }
+
+    /** Wakes up a consumer blocked in [take] (it returns null if nothing is pending). */
+    fun wakeUp() {
+        synchronized(lock) {
+            wakeRequested = true
+            lock.notifyAll()
         }
     }
 
