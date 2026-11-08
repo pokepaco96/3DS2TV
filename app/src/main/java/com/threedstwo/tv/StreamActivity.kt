@@ -280,6 +280,7 @@ class StreamActivity : Activity(), NtrSession.Listener, InputManager.InputDevice
         renderer.stop()
         decoder?.stop()
         decoder = null
+        SessionProbe.state = ConnectionState.DISCONNECTED
         super.onStop()
     }
 
@@ -652,6 +653,11 @@ class StreamActivity : Activity(), NtrSession.Listener, InputManager.InputDevice
         override fun run() {
             val st = buildStats()
             app.lastStats = st
+            SessionProbe.state = st.state
+            SessionProbe.presentedFrames = renderer.presentedFrames
+            SessionProbe.decodedFrames = decoder?.decoded ?: 0
+            SessionProbe.decodeErrors = decoder?.errors ?: 0
+            SessionProbe.surfaceWidth = surface.width
             if (settings.showHud) hud.text = formatStats(st)
             main.postDelayed(this, 500)
         }
