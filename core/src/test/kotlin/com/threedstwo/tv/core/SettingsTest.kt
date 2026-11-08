@@ -29,7 +29,7 @@ class SettingsTest {
             mapping = com.threedstwo.tv.core.input.ButtonMapping.preset(MappingPreset.XBOX_LABELS).with(PadControl.R3, Action.TOUCH),
             layout = AppSettings().layout.copy(viewMode = ViewMode.BOTTOM_ONLY, arrangement = Arrangement.HORIZONTAL,
                 bottomFirst = true, topRotation = Rotation.R270, bottomRotation = Rotation.R90, gap = 20, integerScale = true),
-            circleDeadzone = 0.3f, cursorSpeed = 500, tvRemoteAsPad = true, preferredController = "abc",
+            circleDeadzone = 0.3f, cursorSpeed = 500, touchButton = PadControl.L1, tvRemoteAsPad = true, preferredController = "abc",
         )
         val store = MemoryStore()
         s.save(store)

@@ -2,6 +2,7 @@ package com.threedstwo.tv.core.settings
 
 import com.threedstwo.tv.core.input.ButtonMapping
 import com.threedstwo.tv.core.input.MappingPreset
+import com.threedstwo.tv.core.input.PadControl
 import com.threedstwo.tv.core.layout.LayoutSettings
 import com.threedstwo.tv.core.ntr.NtrConstants
 import com.threedstwo.tv.core.ntr.RemotePlayRequest
@@ -47,6 +48,8 @@ data class AppSettings(
     val cursorStick: CursorStick = CursorStick.RIGHT_STICK,
     /** Native bottom-screen pixels per second at full deflection. */
     val cursorSpeed: Int = 300,
+    /** While the touch cursor is active this control "touches" the screen (instead of its normal action). */
+    val touchButton: PadControl = PadControl.R1,
     val tvRemoteAsPad: Boolean = false,
     /** Descriptor of the preferred controller (InputDevice.getDescriptor), empty = first available. */
     val preferredController: String = "",
@@ -96,6 +99,7 @@ data class AppSettings(
                 "touchCursorEnabled" to touchCursorEnabled.toString(),
                 "cursorStick" to cursorStick.name,
                 "cursorSpeed" to cursorSpeed.toString(),
+                "touchButton" to touchButton.name,
                 "tvRemoteAsPad" to tvRemoteAsPad.toString(),
                 "preferredController" to preferredController,
                 "maxReconnectAttempts" to maxReconnectAttempts.toString(),
@@ -154,6 +158,7 @@ data class AppSettings(
                 touchCursorEnabled = store.bool("touchCursorEnabled", d.touchCursorEnabled),
                 cursorStick = store.enum("cursorStick", d.cursorStick),
                 cursorSpeed = store.int("cursorSpeed", d.cursorSpeed, 50..1000),
+                touchButton = store.enum("touchButton", d.touchButton),
                 tvRemoteAsPad = store.bool("tvRemoteAsPad", d.tvRemoteAsPad),
                 preferredController = store.getString("preferredController") ?: d.preferredController,
                 maxReconnectAttempts = store.int("maxReconnectAttempts", d.maxReconnectAttempts, 1..50),

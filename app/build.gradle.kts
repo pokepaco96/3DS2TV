@@ -33,7 +33,9 @@ android {
     lint {
         abortOnError = true
         checkReleaseBuilds = false
-        disable += setOf("GradleDependency", "AndroidGradlePluginVersion", "NewerVersionAvailable", "OldTargetApi")
+        disable += setOf("GradleDependency", "AndroidGradlePluginVersion", "NewerVersionAvailable", "OldTargetApi",
+            // Single-language (Spanish) TV UI built in code; generated icons.
+            "SetTextI18n", "IconLauncherShape", "IconMissingDensityFolder")
     }
 }
 
