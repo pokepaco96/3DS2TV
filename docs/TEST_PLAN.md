@@ -31,11 +31,29 @@ Tres niveles, de más a menos automatizable. Ninguno sustituye a la validación 
 - puerto UDP liberado entre sesiones (desconectar/reconectar 3 veces);
 - Input Redirection: paquetes de 20 bytes, keep-alive y neutro al parar.
 
+### 2b. Robustez (`SessionRobustnessTest`, misma consola simulada con inyección de fallos)
+
+Respuestas TCP fragmentadas byte a byte, magic incorrecto, `dataLen` absurdo (sin asignar memoria), cierre del TCP
+tras el 901 con vídeo continuo, primer 901 ignorado (reenvío), datagramas sin ningún frame completo (nunca STREAMING),
+paquetes duplicados, vídeo desde otra IP (127.0.0.3) diagnosticado, modo pasivo no secuestrable por vídeo incompleto
+ajeno, puerto UDP ocupado, `stop()` rápido durante un `connect()`, IP inválida.
+
+### 2c. Fixtures y soak (`:core`)
+
+`LumaFixturesTest`: datagramas de 20 bytes escritos a mano en hexadecimal a partir de `input_redirection.c`, POWER
+imposible, HOME desactivado por defecto, elección de ejes por dispositivo. `ConnectionChecklistTest`: etapas.
+`PipelineSoakTest`: 20 000 frames con 2 % de pérdida, desorden y duplicados; todo frame completado se consume o se
+cuenta como descartado, buffers no se agotan; imprime el rendimiento (no es una medida del Chromecast).
+
 ## 3. Emulador Android TV (CI) — `./gradlew :app:connectedDebugAndroidTest`
 
 `StreamEndToEndTest` (job "emulator" de GitHub Actions, Android TV API 31 x86): consola simulada dentro del proceso
 de test → app real → `BitmapFactory` → `SurfaceView`. Verifica estado STREAMING, >30 frames decodificados y
-presentados sin errores, comando 901 correcto y llegada de paquetes neutros de Input Redirection a 127.0.0.1:4950.
+presentados sin errores, comando 901 correcto, llegada de paquetes neutros de Input Redirection a 127.0.0.1:4950, salida a
+otra pantalla (espera real a `onStop`) y reanudación de la imagen. `appIsAnAndroidTvLauncherAppWithBanner`: intent
+LEANBACK_LAUNCHER, banner y pantalla táctil no requerida.
+
+Tests JVM de la app (`GamepadKeyMappingTest`): códigos de tecla Android → controles; teclas de sistema ignoradas.
 
 ## 4. Manual con `mock-3ds-sender` (sin 3DS)
 

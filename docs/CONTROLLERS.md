@@ -35,6 +35,10 @@ POWER de la 3DS no se puede asignar (riesgo de apagar la consola). HOME solo si 
 
 ## Sticks
 
+- Ejes por dispositivo: si el mando declara `AXIS_Z/RZ` (estándar Xbox/PlayStation) son el stick derecho; si solo es un
+  HID genérico con `AXIS_RX/RY`, se usan esos y `Z/RZ` se tratan como gatillos. Los gatillos se normalizan con el rango
+  que declara el mando (algunos van de −1 a 1). El probador de mando muestra qué ejes se usan.
+
 - Zona muerta radial y sensibilidad configurables por stick (Circle Pad 15 % y C-Stick 20 % por defecto).
 - Escala del Circle Pad: ±0x5D0 alrededor de 0x800 (el mismo rango que usa NTRViewer-HR).
 

@@ -9,32 +9,37 @@ New 3DS XL (Luma3DS + NTR-HR) ──Wi-Fi/LAN──▶ 3DS2TV (APK en el Chromec
              └──── mando del Chromecast → Luma3DS Input Redirection (UDP 4950) ◀┘
 ```
 
-> **Estado (v0.1.0, 8-nov-2026): implementado; tests JVM (64), integración por red con consola simulada (11) y prueba
-> end-to-end en emulador Android TV API 31 en verde en GitHub Actions.
-> No se ha probado todavía en una New 3DS XL ni en un Chromecast reales** (el desarrollo se hizo en un entorno cloud
-> sin acceso a tus dispositivos). Checklist de validación: [`docs/HARDWARE_VALIDATION.md`](docs/HARDWARE_VALIDATION.md).
+> **Estado: build candidata a primera prueba física (v0.1.0).** Implementado y probado con **simulador** (consola NTR-HR
+> falsa por red real) y en **emulador** Android TV API 31 (GitHub Actions). **No validado todavía en una New 3DS XL ni en
+> un Chromecast reales.** Guía de la primera prueba: [`docs/FIRST_REAL_DEVICE_TEST.md`](docs/FIRST_REAL_DEVICE_TEST.md) ·
+> registro: [`docs/HARDWARE_VALIDATION.md`](docs/HARDWARE_VALIDATION.md) · auditoría: [`docs/CONTINUATION_AUDIT.md`](docs/CONTINUATION_AUDIT.md).
 
-## Funciones
+## Funciones y nivel de evidencia
 
-| Función | Estado |
-|---|---|
-| Conexión a NTR-HR (TCP 8000, orden Remote Play) y vídeo **JPEG Compat** por UDP 8001 | ✅ Implementado · tests de protocolo, integración y emulador |
-| Modo pasivo (la consola inicia Remote Play hacia el Chromecast) y aprendizaje de la IP | ✅ Implementado · test de integración |
-| Solo superior / solo inferior / ambas; vertical u horizontal; intercambio de orden | ✅ Implementado · tests de layout |
-| Rotación independiente 0/90/180/270°, tamaño por pantalla, separación, margen, escalado entero | ✅ Implementado · tests de layout |
-| Proporción siempre conservada; filtro píxel nítido o bilineal; pantalla completa | ✅ Implementado |
-| Calidad JPEG, QoS, pantalla prioritaria y factor enviados a NTR-HR en caliente | ✅ Implementado · test de integración |
-| Reconexión automática con backoff, errores explicativos (IP, sin UDP, formato no soportado) | ✅ Implementado · tests de integración |
-| HUD: FPS recibidos/mostrados, bitrate, pérdidas, decodificación, recepción→pantalla | ✅ Implementado |
-| Ajustes persistentes, diagnóstico y log exportable | ✅ Implementado · tests de ajustes |
-| Mandos Bluetooth/USB reconocidos por Android → **Luma3DS Input Redirection** (A/B/X/Y, cruceta, L/R, ZL/ZR, Start/Select, Circle Pad, C-Stick) | ✅ Implementado · tests de codificación · ⚠️ pendiente de prueba física |
-| Perfiles, intercambio A/B-X/Y, reasignación, deadzone/sensibilidad, probador de mando | ✅ Implementado |
-| Liberación de botones al abrir menú, pausar, desconectar mando o salir | ✅ Implementado · tests |
-| Cursor táctil virtual en la pantalla inferior (con rotación/escala correctas) | ✅ Implementado · tests · ⚠️ pendiente de prueba física |
-| Audio DSP de NTR-HR 0.3.8+ (AudioTrack, latencia acotada) | 🧪 Experimental, desactivado por defecto · test con audio sintético |
-| Mandos USB mediante hub USB-C PD | 🧪 Experimental: depende del hub; sin probar |
-| NTR-HR Reliable Stream, RS Delta, Lossless/Uncompressed | ❌ No implementado: se detecta y se muestra un aviso |
-| CSND audio, juegos DS/DSiWare/GBA, Old 3DS | ❌ No soportado por NTR-HR |
+Leyenda: ✅ sí · — no aplica / no probado · ❌ no implementado. "Simulador" = tests JVM con `FakeNtrConsole` por sockets
+reales; "Emulador" = test instrumentado en Android TV API 31 x86; "Hardware" = New 3DS XL + Chromecast reales.
+
+| Función | Implementado | Tests unitarios | Simulador | Emulador | Hardware real |
+|---|---|---|---|---|---|
+| NTR-HR JPEG Compat: TCP 8000, orden 901, vídeo UDP 8001 | ✅ | ✅ | ✅ | ✅ | pendiente |
+| Modo pasivo (la consola inicia) y aprendizaje seguro de la IP | ✅ | — | ✅ | — | pendiente |
+| Reconexión, errores explicados, checklist por etapas (TCP / 901 / UDP / frame completo / imagen / mandos) | ✅ | ✅ | ✅ | parcial (STREAMING + imagen) | pendiente |
+| Prueba de conexión en Diagnóstico (OK solo con JPEG decodificados) | ✅ | — | — | — | pendiente |
+| Solo superior / inferior / ambas; vertical/horizontal; intercambio; rotación y tamaño por pantalla | ✅ | ✅ | — | dibujo ✅ | pendiente |
+| Proporción conservada, píxel nítido/bilineal, escalado entero | ✅ | ✅ | — | — | pendiente |
+| Calidad JPEG / QoS / prioridad enviadas en caliente | ✅ | ✅ | ✅ | — | pendiente |
+| HUD de métricas y exportación de informe (IPs ocultables, commit, último crash) | ✅ | ✅ (máscara IP) | — | — | pendiente |
+| Luma3DS Input Redirection (UDP 4950, 20 bytes) | ✅ | ✅ (fixtures hex) | ✅ | ✅ (paquetes neutros) | pendiente |
+| Mandos Android: mapeo, perfiles, A/B-X/Y, reasignación, deadzone, ejes por dispositivo, probador | ✅ | ✅ | — | — | pendiente |
+| Liberación de botones (menú, pausa, mando desconectado, salir) | ✅ | ✅ | ✅ | — | pendiente |
+| Cursor táctil con rotación/escala | ✅ | ✅ | — | — | pendiente |
+| Audio DSP de NTR-HR 0.3.8+ (experimental, desactivado por defecto) | ✅ | ✅ | ✅ (sintético) | — | pendiente |
+| Mandos USB por hub USB-C PD (experimental) | ✅ (si Android lo expone) | — | — | — | pendiente |
+| Reliable Stream / RS Delta / Lossless | ❌ (se detectan y se avisa) | ✅ (detección) | ✅ (aviso) | — | — |
+| Audio CSND, juegos DS/DSiWare/GBA, Old 3DS | ❌ no soportado por NTR-HR | | | | |
+
+Tests automáticos (medidos en este commit): `:core` 67 · `:tools:mock-3ds-sender` 23 (red real por loopback) ·
+`:app` 2 JVM + 2 instrumentados (emulador). Ninguno sustituye a la prueba física.
 
 ## Requisitos
 

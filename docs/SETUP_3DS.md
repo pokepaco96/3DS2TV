@@ -57,6 +57,7 @@ de 3DS2TV), **Viewer Port** = 8001, **Fmt/Prot: JPEG UDP** → **Apply**.
 | Se ve un juego de DS/DSiWare/GBA en negro | No soportado por NTR-HR (modo de compatibilidad de la CPU) | No hay solución con este método. |
 | Algunos juegos no emiten | Incompatibilidad conocida de NTR-HR | Prueba otra versión de NTR-HR o el juego en otro momento; no depende de 3DS2TV. |
 | El mando no hace nada | Input Redirection no iniciado o IP distinta | Paso 3; en 3DS2TV → Diagnóstico mira "Input: → IP:4950". |
+| Tras un corte brusco de Wi-Fi del Chromecast no reconecta | NTR-HR atiende una sola conexión TCP en el puerto 8000 y puede quedarse esperando la anterior | X+Y → Remote Play → Apply (reinicia), o usa el modo pasivo. |
 | Sin audio | NTR-HR < 0.3.8, audio no activado, juego CSND | Activa audio en 3DS2TV (Ajustes); los juegos CSND no tienen audio; alternativa: cable 3,5 mm. |
 
 ## Advertencias
