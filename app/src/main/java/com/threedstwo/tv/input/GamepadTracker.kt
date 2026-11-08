@@ -3,6 +3,7 @@ package com.threedstwo.tv.input
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
+import com.threedstwo.tv.core.input.AxisLayout
 import com.threedstwo.tv.core.input.PadControl
 import com.threedstwo.tv.core.input.PadSnapshot
 
@@ -21,6 +22,9 @@ class GamepadTracker {
         private set
     var preferredDescriptor: String = ""
 
+    /** Axis layout of the active device (decided from its declared motion ranges). */
+    var axisLayout: AxisLayout = STANDARD_LAYOUT
+        private set
     private val held = mutableSetOf<PadControl>()
     private var lx = 0f; private var ly = 0f; private var rx = 0f; private var ry = 0f
     private var lt = 0f; private var rt = 0f; private var hx = 0f; private var hy = 0f
@@ -56,6 +60,7 @@ class GamepadTracker {
         }
         activeDeviceId = device.id
         activeDeviceName = device.name
+        axisLayout = layoutFor(device)
         return true
     }
 
@@ -76,18 +81,38 @@ class GamepadTracker {
             event.action != MotionEvent.ACTION_MOVE
         ) return false
         if (!accept(event.device)) return true
+        val l = axisLayout
+        val dev = event.device
         lx = event.getAxisValue(MotionEvent.AXIS_X)
         ly = event.getAxisValue(MotionEvent.AXIS_Y)
-        rx = event.getAxisValue(MotionEvent.AXIS_Z)
-        ry = event.getAxisValue(MotionEvent.AXIS_RZ)
-        lt = maxOf(event.getAxisValue(MotionEvent.AXIS_LTRIGGER), event.getAxisValue(MotionEvent.AXIS_BRAKE))
-        rt = maxOf(event.getAxisValue(MotionEvent.AXIS_RTRIGGER), event.getAxisValue(MotionEvent.AXIS_GAS))
+        rx = event.getAxisValue(l.rightX)
+        ry = event.getAxisValue(l.rightY)
+        lt = l.leftTriggers.maxOf { trigger(event, dev, it) }
+        rt = l.rightTriggers.maxOf { trigger(event, dev, it) }
         hx = event.getAxisValue(MotionEvent.AXIS_HAT_X)
         hy = event.getAxisValue(MotionEvent.AXIS_HAT_Y)
         return true
     }
 
+    private fun trigger(e: MotionEvent, d: InputDevice?, axis: Int): Float {
+        val range = d?.getMotionRange(axis, e.source) ?: return 0f
+        return AxisLayout.normalizeTrigger(e.getAxisValue(axis), range.min, range.max)
+    }
+
     companion object {
+        val AXIS_IDS = AxisLayout.Ids(
+            x = MotionEvent.AXIS_X, y = MotionEvent.AXIS_Y, z = MotionEvent.AXIS_Z, rz = MotionEvent.AXIS_RZ,
+            rx = MotionEvent.AXIS_RX, ry = MotionEvent.AXIS_RY, lTrigger = MotionEvent.AXIS_LTRIGGER,
+            rTrigger = MotionEvent.AXIS_RTRIGGER, brake = MotionEvent.AXIS_BRAKE, gas = MotionEvent.AXIS_GAS,
+        )
+        val STANDARD_LAYOUT = AxisLayout.choose(AXIS_IDS) { it != MotionEvent.AXIS_RX && it != MotionEvent.AXIS_RY }
+
+        fun layoutFor(d: InputDevice): AxisLayout =
+            AxisLayout.choose(AXIS_IDS) { axis -> d.getMotionRange(axis, InputDevice.SOURCE_JOYSTICK) != null }
+
+        fun describeAxes(l: AxisLayout): String =
+            "stick der. ${MotionEvent.axisToString(l.rightX)}/${MotionEvent.axisToString(l.rightY)}"
+
         fun isGameController(d: InputDevice): Boolean {
             val s = d.sources
             return !d.isVirtual && (s and InputDevice.SOURCE_GAMEPAD == InputDevice.SOURCE_GAMEPAD ||

@@ -184,6 +184,11 @@ class StreamActivity : Activity(), NtrSession.Listener, InputManager.InputDevice
 
     private fun applyVisualSettings() {
         renderer.layout = settings.layout
+        if (cursorMode && settings.layout.viewMode == ViewMode.TOP_ONLY) {
+            // Never send touches at a position the user cannot see.
+            cursorMode = false
+            renderer.cursor = null
+        }
         renderer.smooth = settings.filter == ScalingFilter.BILINEAR
         hud.visibility = if (settings.showHud) View.VISIBLE else View.GONE
         audio.setVolume(settings.audioVolume / 100f)

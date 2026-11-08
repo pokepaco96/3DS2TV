@@ -147,7 +147,7 @@ class ControllerActivity : Activity(), InputManager.InputDeviceListener {
         val f = r.frame
         fun fmt(v: Float) = String.format(Locale.US, "%+.2f", v)
         testText.text = buildString {
-            append("Mando: ${tracker.activeDeviceName ?: "—"}\n")
+            append("Mando: ${tracker.activeDeviceName ?: "—"} (${GamepadTracker.describeAxes(tracker.axisLayout)})\n")
             append("Controles: ${pad.effectiveHeld().joinToString { it.name }.ifEmpty { "—" }}\n")
             append("Stick izq ${fmt(pad.leftX)}, ${fmt(pad.leftY)}   Stick der ${fmt(pad.rightX)}, ${fmt(pad.rightY)}\n")
             append("Gatillos ${fmt(pad.leftTrigger)} / ${fmt(pad.rightTrigger)}   HAT ${fmt(pad.hatX)}, ${fmt(pad.hatY)}\n\n")

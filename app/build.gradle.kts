@@ -31,6 +31,11 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    testOptions {
+        // JVM unit tests only use pure logic and compile-time Android constants.
+        unitTests.isReturnDefaultValues = true
+    }
+
     lint {
         abortOnError = true
         checkReleaseBuilds = false
