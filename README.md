@@ -9,7 +9,8 @@ New 3DS XL (Luma3DS + NTR-HR) ──Wi-Fi/LAN──▶ 3DS2TV (APK en el Chromec
              └──── mando del Chromecast → Luma3DS Input Redirection (UDP 4950) ◀┘
 ```
 
-> **Estado (v0.1.0, 8-nov-2026): implementado y probado con tests automáticos y consola simulada.
+> **Estado (v0.1.0, 8-nov-2026): implementado; tests JVM (64), integración por red con consola simulada (11) y prueba
+> end-to-end en emulador Android TV API 31 en verde en GitHub Actions.
 > No se ha probado todavía en una New 3DS XL ni en un Chromecast reales** (el desarrollo se hizo en un entorno cloud
 > sin acceso a tus dispositivos). Checklist de validación: [`docs/HARDWARE_VALIDATION.md`](docs/HARDWARE_VALIDATION.md).
 
