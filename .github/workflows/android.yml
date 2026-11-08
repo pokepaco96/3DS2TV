@@ -92,10 +92,16 @@ jobs:
           arch: x86
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
-          script: ./gradlew --no-daemon :app:connectedDebugAndroidTest
+          script: |
+            adb shell svc power stayon true
+            adb shell input keyevent KEYCODE_WAKEUP
+            adb shell wm dismiss-keyguard || true
+            ./gradlew --no-daemon :app:connectedDebugAndroidTest || (adb logcat -d -s 3DS2TV AndroidRuntime TestRunner > logcat.txt; exit 1)
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: emulator-test-reports
-          path: app/build/reports/androidTests/
+          path: |
+            app/build/reports/androidTests/
+            logcat.txt

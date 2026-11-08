@@ -27,7 +27,7 @@ class InputRedirectionSender(
     private var current: InputFrame = InputFrame.NEUTRAL
     private var dirty = true
     @Volatile private var running = false
-    private var socket: DatagramSocket? = null
+    @Volatile private var socket: DatagramSocket? = null
     private var thread: Thread? = null
 
     @Volatile var packetsSent = 0L
@@ -64,6 +64,10 @@ class InputRedirectionSender(
 
     fun currentFrame(): InputFrame = synchronized(lock) { current }
 
+    /**
+     * Stops sending. The sender thread itself transmits the neutral frame 3 times and closes the socket,
+     * so this is safe to call from the Android main thread (no network I/O here).
+     */
     fun stop() {
         synchronized(lock) {
             if (!running) return
@@ -72,25 +76,28 @@ class InputRedirectionSender(
             lock.notifyAll()
         }
         thread?.join(500)
-        // Make sure the console ends up with every button released.
-        val neutral = InputFrame.NEUTRAL.encode()
-        repeat(3) { sendRaw(neutral) }
-        socket?.close()
-        socket = null
+        thread = null
     }
 
     private fun loop() {
         val buf = ByteArray(InputFrame.PACKET_SIZE)
-        while (true) {
-            val frame: InputFrame
-            synchronized(lock) {
-                if (!running) return
-                if (!dirty) lock.wait(keepAliveMs)
-                if (!running) return
-                frame = current
-                dirty = false
+        try {
+            while (true) {
+                val frame: InputFrame
+                synchronized(lock) {
+                    if (running && !dirty) lock.wait(keepAliveMs)
+                    if (!running) return
+                    frame = current
+                    dirty = false
+                }
+                sendRaw(frame.encode(buf))
             }
-            sendRaw(frame.encode(buf))
+        } finally {
+            // Make sure the console ends up with every button released.
+            val neutral = InputFrame.NEUTRAL.encode()
+            repeat(3) { sendRaw(neutral) }
+            socket?.close()
+            socket = null
         }
     }
 
