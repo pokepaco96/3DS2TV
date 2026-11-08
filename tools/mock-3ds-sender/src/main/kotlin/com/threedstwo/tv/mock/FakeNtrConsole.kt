@@ -52,6 +52,22 @@ class FakeNtrConsole(
     @Volatile var paused = false
     @Volatile var sendUnsupported = false
     @Volatile var acceptCommands = true
+
+    // ---- fault injection (tests) ----
+    /** Write TCP replies one byte at a time (partial reads on the receiver). */
+    @Volatile var fragmentTcpReplies = false
+    /** Reply to heartbeats with a wrong magic value. */
+    @Volatile var badMagicReplies = false
+    /** Reply to heartbeats announcing an absurd dataLen (0xFFFFFFF0). */
+    @Volatile var hugeDataLenReplies = false
+    /** Close the TCP connection right after a Remote Play command (video keeps flowing). */
+    @Volatile var closeTcpAfterCommand = false
+    /** Ignore this many Remote Play commands before starting to stream. */
+    @Volatile var ignoreFirstCommands = 0
+    /** Never send the last packet of a frame: datagrams arrive but no frame is ever complete. */
+    @Volatile var dropEndPackets = false
+    /** Send each video packet twice. */
+    @Volatile var duplicatePackets = false
     @Volatile var running = false
         private set
     @Volatile private var target: InetSocketAddress? = null
@@ -76,7 +92,8 @@ class FakeNtrConsole(
             bind(InetSocketAddress(InetAddress.getByName(bindAddress), controlPort))
             soTimeout = 200
         }
-        udp = DatagramSocket()
+        // Bind to the console address so datagrams really come FROM it (lets tests use 127.0.0.x as different hosts).
+        udp = DatagramSocket(InetSocketAddress(InetAddress.getByName(bindAddress), 0))
         if (inputPort >= 0) {
             inputSocket = DatagramSocket(InetSocketAddress(InetAddress.getByName(bindAddress), inputPort)).apply { soTimeout = 200 }
             spawn("fake-input") { inputLoop() }
@@ -136,20 +153,34 @@ class FakeNtrConsole(
                         NtrConstants.CMD_HEARTBEAT -> {
                             heartbeats.incrementAndGet()
                             val text = if (heartbeats.get() == 1) "fake ntr-hr ready\n".toByteArray() else ByteArray(0)
-                            out.write(NtrControlPacket(seq = p.seq, type = 0, cmd = 0, dataLen = text.size).encode())
-                            out.write(text)
-                            out.flush()
+                            val reply = NtrControlPacket(
+                                seq = p.seq, type = 0, cmd = 0,
+                                dataLen = if (hugeDataLenReplies) 0xFFFFFFF0.toInt() else text.size,
+                                magic = if (badMagicReplies) 0x0BADBEEF else NtrConstants.TCP_MAGIC,
+                            ).encode() + (if (hugeDataLenReplies) ByteArray(0) else text)
+                            if (fragmentTcpReplies) {
+                                for (b in reply) { out.write(b.toInt()); out.flush() }
+                            } else {
+                                out.write(reply)
+                                out.flush()
+                            }
                         }
                         NtrConstants.CMD_REMOTE_PLAY -> if (acceptCommands) {
                             commands += RemotePlayCommand(p.args.copyOf(), sock.inetAddress)
-                            quality = p.args[1]
-                            topPriority = (p.args[0] shr 8) and 1 == 1
-                            factor = p.args[0] and 0xFF
-                            val port = if (p.args[3] == NtrConstants.GUARDING_MAGIC) p.args[4] and 0xFFFF else NtrConstants.DEFAULT_VIEWER_PORT
-                            audio = p.args[3] == NtrConstants.GUARDING_MAGIC && p.args[5] > 0
-                            target = InetSocketAddress(sock.inetAddress, port)
-                            paused = false
-                            log("901: quality=${p.args[1]} port=$port audio=$audio")
+                            if (ignoreFirstCommands > 0) {
+                                ignoreFirstCommands--
+                                log("901 ignored (fault injection)")
+                            } else {
+                                quality = p.args[1]
+                                topPriority = (p.args[0] shr 8) and 1 == 1
+                                factor = p.args[0] and 0xFF
+                                val port = if (p.args[3] == NtrConstants.GUARDING_MAGIC) p.args[4] and 0xFFFF else NtrConstants.DEFAULT_VIEWER_PORT
+                                audio = p.args[3] == NtrConstants.GUARDING_MAGIC && p.args[5] > 0
+                                target = InetSocketAddress(sock.inetAddress, port)
+                                paused = false
+                                log("901: quality=${p.args[1]} port=$port audio=$audio")
+                                if (closeTcpAfterCommand) return@use
+                            }
                         }
                     }
                 }
@@ -181,8 +212,12 @@ class FakeNtrConsole(
                         continue
                     }
                     val packets = JpegPacketizer.packetize(TestPattern.frameJpeg(sc, frame, quality), sc, frame and 0xFF)
-                    val ordered = if (reorder) packets.shuffled(random) else packets
-                    for (p in ordered) if (random.nextDouble() >= lossProbability) send(p, t)
+                    var ordered = if (reorder) packets.shuffled(random) else packets
+                    if (dropEndPackets) ordered = ordered.filter { (it[1].toInt() and NtrConstants.HDR1_END_FLAG) == 0 }
+                    for (p in ordered) if (random.nextDouble() >= lossProbability) {
+                        send(p, t)
+                        if (duplicatePackets) send(p, t)
+                    }
                     framesSent.incrementAndGet()
                 }
                 if (audio) {

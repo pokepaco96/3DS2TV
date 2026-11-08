@@ -52,7 +52,9 @@ class NtrSession(
         private set
 
     private val assembler = JpegFrameAssembler(listener = { info, data, len ->
+        // Only a COMPLETE frame counts as "receiving video" (never a bare datagram).
         lastVideoNanos = System.nanoTime()
+        if (consoleAddress == null) lockLearnedAddress()
         listener.onVideoFrame(info, data, len)
     })
     private val audioSequencer = AudioSequencer()
@@ -70,11 +72,19 @@ class NtrSession(
     @Volatile var reconnections = 0L
         private set
 
+    /** Per-stage counters so the UI can tell TCP / command / UDP / complete frames apart. */
+    val diagnostics = SessionDiagnostics()
+
     @Volatile private var running = false
     @Volatile private var lastVideoNanos = 0L
     @Volatile private var consoleAddress: InetAddress? = null
     @Volatile private var pendingRequest: RemotePlayRequest? = null
-    private var udpSocket: DatagramSocket? = null
+    @Volatile private var udpSocket: DatagramSocket? = null
+    /** Socket of the TCP connection being opened or in use, closed by [stop] to unblock the control thread. */
+    @Volatile private var controlSocket: Socket? = null
+    /** Passive mode without IP: source we are trying to assemble frames from (locked after a complete frame). */
+    @Volatile private var candidateAddress: InetAddress? = null
+    private var candidateSinceNanos = 0L
     private var udpThread: Thread? = null
     private var controlThread: Thread? = null
     private val lock = Object()
@@ -95,20 +105,21 @@ class NtrSession(
             val sock = if (cfg.bindAddress != null) {
                 DatagramSocket(InetSocketAddress(InetAddress.getByName(cfg.bindAddress), cfg.viewerPort))
             } else {
-                DatagramSocket(null).apply {
-                    reuseAddress = true
-                    bind(InetSocketAddress(cfg.viewerPort))
-                }
+                // No SO_REUSEADDR: with UDP it would let two sockets share the port and steal packets.
+                DatagramSocket(InetSocketAddress(cfg.viewerPort))
             }
             sock.receiveBufferSize = 2 * 1024 * 1024
             sock.soTimeout = 200
             udpSocket = sock
         } catch (e: IOException) {
             running = false
-            setState(ConnectionState.ERROR, "No se pudo abrir el puerto UDP ${cfg.viewerPort}: ${e.message}")
+            setState(ConnectionState.ERROR,
+                "No se pudo abrir el puerto UDP ${cfg.viewerPort} (¿lo usa otra app o una sesión anterior?): ${e.message}")
             return
         }
         lastVideoNanos = 0L
+        candidateAddress = null
+        diagnostics.reset()
         assembler.reset()
         audioSequencer.reset()
         unsupportedKind = null
@@ -128,11 +139,14 @@ class NtrSession(
             if (!running) return
             running = false
         }
+        // Closing the sockets unblocks receive()/connect()/read() immediately, so the joins below
+        // are short even when called from the Android main thread.
         udpSocket?.close()
+        controlSocket?.let { try { it.close() } catch (_: IOException) {} }
         controlThread?.interrupt()
         try {
-            udpThread?.join(1000)
-            controlThread?.join(1500)
+            udpThread?.join(500)
+            controlThread?.join(500)
         } catch (_: InterruptedException) {
             Thread.currentThread().interrupt()
         }
@@ -177,25 +191,39 @@ class NtrSession(
                 break
             }
             val from = packet.address
+            val len = packet.length
             val expected = consoleAddress
+            val kind = PacketClassifier.classify(buf, 0, len)
             if (expected != null && from != expected) {
                 foreignPackets++
+                if (kind == PacketKind.VIDEO_JPEG || kind == PacketKind.AUDIO) diagnostics.noteForeign(from.hostAddress)
                 continue
             }
-            when (val kind = PacketClassifier.classify(buf, 0, packet.length)) {
+            if (expected == null) {
+                // Passive mode without IP: only assemble from one candidate source at a time and lock to
+                // it after its first COMPLETE frame (a stray datagram cannot hijack the session).
+                if (kind != PacketKind.VIDEO_JPEG) continue
+                val now = System.nanoTime()
+                val cand = candidateAddress
+                if (cand == null || (cand != from && now - candidateSinceNanos > CANDIDATE_TIMEOUT_NANOS)) {
+                    candidateAddress = from
+                    candidateSinceNanos = now
+                    assembler.reset()
+                } else if (cand != from) {
+                    diagnostics.noteForeign(from.hostAddress)
+                    continue
+                }
+            }
+            diagnostics.udpPacketsFromConsole++
+            when (kind) {
                 PacketKind.VIDEO_JPEG -> {
-                    if (expected == null && config.mode == ConnectMode.PASSIVE) {
-                        consoleAddress = from
-                        listener.onConsoleAddressLearned(from.hostAddress)
-                    }
-                    assembler.feed(buf, 0, packet.length)
+                    diagnostics.videoPackets++
+                    assembler.feed(buf, 0, len)
                 }
                 PacketKind.AUDIO -> {
-                    if (expected != null) {
-                        audioPackets++
-                        audioSequencer.feed(buf, 0, packet.length) { pcm, off, silence ->
-                            listener.onAudioFrame(pcm, off, silence)
-                        }
+                    audioPackets++
+                    audioSequencer.feed(buf, 0, len) { pcm, off, silence ->
+                        listener.onAudioFrame(pcm, off, silence)
                     }
                 }
                 PacketKind.RELIABLE_STREAM -> {
@@ -209,6 +237,12 @@ class NtrSession(
                 PacketKind.INVALID -> assembler.stats.invalidPackets++
             }
         }
+    }
+
+    private fun lockLearnedAddress() {
+        val cand = candidateAddress ?: return
+        consoleAddress = cand
+        listener.onConsoleAddressLearned(cand.hostAddress)
     }
 
     // ---------------------------------------------------------------- control
@@ -277,15 +311,27 @@ class NtrSession(
                 Outcome.NO_VIDEO -> {
                     attempt++
                     if (attempt > config.maxReconnectAttempts) {
-                        setState(ConnectionState.ERROR,
-                            "La consola acepta la conexión pero no llega vídeo UDP al puerto ${config.viewerPort}. " +
-                                "Revisa aislamiento de clientes Wi-Fi, que el protocolo sea JPEG/UDP y el Viewer IP en NTR-HR.")
+                        setState(ConnectionState.ERROR, noVideoMessage())
                         break
                     }
                     if (!sleepMs(config.backoffMs(attempt))) break
                 }
                 Outcome.STOPPED -> break
             }
+        }
+    }
+
+    private fun noVideoMessage(): String {
+        val foreign = diagnostics.lastForeignSource
+        val d = diagnostics
+        return when {
+            foreign != null && d.videoPackets == 0L ->
+                "Llegan paquetes NTR desde $foreign, pero la IP configurada es ${config.consoleIp}. ¿Es esa la IP correcta de la 3DS?"
+            d.videoPackets > 0 ->
+                "Llegan paquetes de vídeo UDP pero ningún frame completo (${d.videoPackets} paquetes). Wi-Fi con muchas pérdidas: baja la calidad JPEG/QoS o acerca la 3DS al router."
+            else ->
+                "La consola acepta la conexión TCP pero no llega vídeo UDP al puerto ${config.viewerPort}. " +
+                    "Revisa aislamiento de clientes Wi-Fi / red de invitados y que la 3DS y este dispositivo estén en la misma red."
         }
     }
 
@@ -320,15 +366,21 @@ class NtrSession(
     private fun connect(): Control? {
         val addr = consoleAddress ?: return null
         val s = Socket()
+        controlSocket = s
         return try {
             s.tcpNoDelay = true
+            s.keepAlive = true
+            if (!running) throw IOException("stopped")
             s.connect(InetSocketAddress(addr, config.controlPort), config.connectTimeoutMs)
             s.soTimeout = 0
+            diagnostics.tcpConnects++
             log("TCP conectado a ${addr.hostAddress}:${config.controlPort}")
             Control(s, s.getOutputStream(), s.getInputStream())
         } catch (e: IOException) {
-            log("TCP: ${e.message}")
+            if (running) log("TCP: ${e.message}")
+            diagnostics.tcpFailures++
             try { s.close() } catch (_: IOException) {}
+            controlSocket = null
             null
         }
     }
@@ -348,23 +400,35 @@ class NtrSession(
         val alive = java.util.concurrent.atomic.AtomicBoolean(true)
         val reader = Thread({
             val header = ByteArray(NtrConstants.TCP_HEADER_SIZE)
+            val data = ByteArray(MAX_TCP_TEXT)
             try {
                 while (running) {
-                    readFully(c.input, header)
+                    readFully(c.input, header, header.size)
                     val p = NtrControlPacket.decode(header)
                     if (p.magic != NtrConstants.TCP_MAGIC) {
-                        log("TCP: protocolo inesperado")
+                        log("TCP: respuesta que no es NTR (magic 0x%08x); ¿el puerto 8000 es de otro programa?".format(p.magic))
+                        diagnostics.tcpProtocolErrors++
                         break
                     }
-                    if (p.dataLen in 1..(1 shl 20)) {
-                        val data = ByteArray(p.dataLen)
-                        readFully(c.input, data)
-                        if (p.cmd == NtrConstants.CMD_HEARTBEAT) {
-                            val text = String(data, Charsets.UTF_8).trim()
-                            if (text.isNotEmpty()) log("NTR: $text")
-                        }
-                    } else if (p.dataLen != 0) {
+                    diagnostics.tcpReplies++
+                    // dataLen is an unsigned u32: reject absurd values instead of allocating them
+                    val len = p.dataLen.toLong() and 0xFFFFFFFFL
+                    if (len > MAX_TCP_PAYLOAD) {
+                        log("TCP: longitud de datos inválida ($len)")
+                        diagnostics.tcpProtocolErrors++
                         break
+                    }
+                    var remaining = len.toInt()
+                    var first = true
+                    while (remaining > 0) {
+                        val n = minOf(remaining, data.size)
+                        readFully(c.input, data, n)
+                        if (first && p.cmd == NtrConstants.CMD_HEARTBEAT) {
+                            val text = String(data, 0, n, Charsets.UTF_8).trim()
+                            if (text.isNotEmpty()) log("NTR: ${text.take(400)}")
+                        }
+                        first = false
+                        remaining -= n
                     }
                 }
             } catch (_: IOException) {
@@ -375,6 +439,7 @@ class NtrSession(
         try {
             pendingRequest = null
             if (!send(c, config.request.toPacket(c.seq++))) return Outcome.LOST
+            diagnostics.remotePlayCommands++
             val sentAt = System.nanoTime()
             var resent = false
             var lastHeartbeat = System.nanoTime()
@@ -395,12 +460,14 @@ class NtrSession(
                         resent = true
                         log("Sin vídeo todavía; reenviando orden Remote Play")
                         if (!send(c, config.request.toPacket(c.seq++))) return Outcome.NO_VIDEO
+                        diagnostics.remotePlayCommands++
                     }
                     if (waited >= config.firstFrameTimeoutMs) return Outcome.NO_VIDEO
                 }
                 pendingRequest?.let {
                     pendingRequest = null
                     if (!send(c, it.toPacket(c.seq++))) return if (everStreamed) Outcome.LOST else Outcome.NO_VIDEO
+                    diagnostics.remotePlayCommands++
                 }
                 if ((now - lastHeartbeat) / 1_000_000 >= config.heartbeatIntervalMs) {
                     lastHeartbeat = now
@@ -418,16 +485,24 @@ class NtrSession(
             return Outcome.STOPPED
         } finally {
             c.close()
+            controlSocket = null
             reader.interrupt()
         }
     }
 
-    private fun readFully(input: InputStream, buf: ByteArray) {
+    private fun readFully(input: InputStream, buf: ByteArray, count: Int) {
         var pos = 0
-        while (pos < buf.size) {
-            val n = input.read(buf, pos, buf.size - pos)
+        while (pos < count) {
+            val n = input.read(buf, pos, count - pos)
             if (n < 0) throw IOException("closed")
             pos += n
         }
+    }
+
+    companion object {
+        /** NTR debug text is small; anything larger is skipped in chunks, never allocated. */
+        private const val MAX_TCP_TEXT = 16 * 1024
+        private const val MAX_TCP_PAYLOAD = 4L * 1024 * 1024
+        private const val CANDIDATE_TIMEOUT_NANOS = 2_000_000_000L
     }
 }
