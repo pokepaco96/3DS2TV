@@ -108,7 +108,9 @@ class NtrSession(
                 // No SO_REUSEADDR: with UDP it would let two sockets share the port and steal packets.
                 DatagramSocket(InetSocketAddress(cfg.viewerPort))
             }
-            sock.receiveBufferSize = 2 * 1024 * 1024
+            // Bounded kernel queue: a huge buffer lets old video pile up (2 MiB ≈ 1 s at 16 Mbit/s) and
+            // shows as growing lag; 384 KiB is a few JPEG frames, older ones are dropped instead.
+            sock.receiveBufferSize = UDP_RECEIVE_BUFFER
             sock.soTimeout = 200
             udpSocket = sock
         } catch (e: IOException) {
@@ -377,8 +379,13 @@ class NtrSession(
             log("TCP conectado a ${addr.hostAddress}:${config.controlPort}")
             Control(s, s.getOutputStream(), s.getInputStream())
         } catch (e: IOException) {
-            if (running) log("TCP: ${e.message}")
+            if (running) log("TCP: ${e.javaClass.simpleName}: ${e.message}")
             diagnostics.tcpFailures++
+            diagnostics.lastTcpError = when (e) {
+                is java.net.ConnectException -> "conexión rechazada (${e.message})"
+                is SocketTimeoutException -> "sin respuesta en ${config.connectTimeoutMs} ms"
+                else -> e.message ?: e.javaClass.simpleName
+            }
             try { s.close() } catch (_: IOException) {}
             controlSocket = null
             null
@@ -503,6 +510,7 @@ class NtrSession(
         /** NTR debug text is small; anything larger is skipped in chunks, never allocated. */
         private const val MAX_TCP_TEXT = 16 * 1024
         private const val MAX_TCP_PAYLOAD = 4L * 1024 * 1024
+        const val UDP_RECEIVE_BUFFER = 384 * 1024
         private const val CANDIDATE_TIMEOUT_NANOS = 2_000_000_000L
     }
 }

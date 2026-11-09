@@ -64,3 +64,20 @@ class AudioSequencer {
         const val MAX_CONCEALED_FRAMES = 10
     }
 }
+
+/** AudioTrack buffer sizing for NTR-HR audio (PCM16 stereo = 4 bytes per frame). */
+object AudioBufferSize {
+    const val BYTES_PER_FRAME = NtrConstants.AUDIO_CHANNELS * 2
+
+    /**
+     * Bytes for [latencyMs] of audio, never below the platform minimum, ALWAYS a whole number of
+     * frames: AudioTrack rejects other sizes with "Invalid audio buffer size" (seen on a real
+     * Chromecast with Google TV, Android 14: 32728 Hz * 4 * 160 ms = 20945 bytes was not a multiple of 4).
+     */
+    fun bytes(latencyMs: Int, platformMinimum: Int, sampleRate: Int = NtrConstants.AUDIO_SAMPLE_RATE): Int {
+        val wanted = sampleRate.toLong() * BYTES_PER_FRAME * latencyMs / 1000
+        val size = maxOf(wanted, platformMinimum.toLong(), BYTES_PER_FRAME.toLong())
+        val rounded = (size + BYTES_PER_FRAME - 1) / BYTES_PER_FRAME * BYTES_PER_FRAME
+        return rounded.toInt()
+    }
+}

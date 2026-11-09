@@ -56,4 +56,13 @@ class ConnectionChecklistTest {
         val ir = eval(SessionDiagnostics()).getValue("InputRedirection")
         assertTrue("explains there is no ACK", ir.hint!!.contains("sin confirmación"))
     }
+
+    @Test fun videoWithoutTcpWarnsThatSettingsDoNotApply() {
+        // Seen on real hardware: console already streaming, TCP 8000 refused.
+        val d = SessionDiagnostics().apply { tcpFailures = 2; lastTcpError = "conexión rechazada"; udpPacketsFromConsole = 1001; videoPackets = 1001 }
+        val tcp = eval(d, completed = 10, recent = true, presented = 10).getValue("ConexiónTCP")
+        assertEquals(Status.FAILED, tcp.status)
+        assertTrue(tcp.hint!!.contains("NO se aplican"))
+        assertTrue(tcp.hint!!.contains("rechazada"))
+    }
 }

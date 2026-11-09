@@ -4,6 +4,18 @@
 "implementado y probado con simulador y emulador", **no** "validado en New 3DS XL / Chromecast".
 Procedimiento detallado: [`FIRST_REAL_DEVICE_TEST.md`](FIRST_REAL_DEVICE_TEST.md).
 
+## Primeros resultados reales (9-nov-2026, informados por el usuario)
+
+Equipo: Chromecast con Google TV (`sabrina`), Android 14 (API 34), Wi-Fi 192.168.1.x/24 · New 3DS XL con NTR-HR · 3DS2TV `36e8dca`.
+
+| Prueba | Resultado observado |
+|---|---|
+| A5/A6 Instalación por ADB inalámbrico y apertura | ✅ Instalada y navegable |
+| B3 Probar conexión | ✅ "RESULTADO: OK — 10 frames completos decodificados (TOP 240x400)", 1001 paquetes UDP, decodificación 4,4 ms, recepción→pantalla 5,9 ms |
+| Conexión TCP 8000 | ✖ Rechazada mientras la consola ya emitía: la calidad/QoS/audio de 3DS2TV no se aplicaban (ahora se avisa: `ConnectionChecklist`, aviso al cambiar ajustes) |
+| Calidad alta | Lag "muy alto" percibido. Causas posibles: ajustes no aplicados por falta de TCP; ancho de banda Wi-Fi 2,4 GHz de la 3DS; cola UDP de 2 MiB en 3DS2TV (reducida a 384 KiB) — pendiente de volver a medir con el HUD |
+| D3 Audio | ✖ `Invalid audio buffer size`: bug de 3DS2TV (buffer de 20 945 bytes, no múltiplo de 4). Corregido con `AudioBufferSize` + test de regresión. Además el audio requiere que el 901 llegue por TCP |
+
 ## Equipo
 
 | Dato | Valor |

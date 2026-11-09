@@ -16,6 +16,7 @@ class SessionDiagnostics {
     @Volatile var foreignNtrPackets = 0L
     @Volatile var lastForeignSource: String? = null
         private set
+    @Volatile var lastTcpError: String? = null
 
     fun noteForeign(ip: String) {
         foreignNtrPackets++
@@ -26,6 +27,7 @@ class SessionDiagnostics {
         tcpConnects = 0; tcpFailures = 0; tcpReplies = 0; tcpProtocolErrors = 0
         remotePlayCommands = 0; udpPacketsFromConsole = 0; videoPackets = 0; foreignNtrPackets = 0
         lastForeignSource = null
+        lastTcpError = null
     }
 }
 
@@ -61,8 +63,13 @@ object ConnectionChecklist {
         if (i.mode == ConnectMode.ACTIVE) {
             items += when {
                 d.tcpConnects > 0 -> CheckItem("Conexión TCP 8000 con NTR-HR", ok)
+                d.tcpFailures > 0 && i.framesCompleted > 0 -> CheckItem("Conexión TCP 8000 con NTR-HR", failed,
+                    "La imagen llega porque la consola ya está emitiendo, pero 3DS2TV no puede enviarle órdenes" +
+                        (d.lastTcpError?.let { " ($it)" } ?: "") +
+                        ": la calidad, el QoS y el audio de 3DS2TV NO se aplican. Cámbialos en la 3DS (X+Y → Remote Play) o reinicia Remote Play/NTR-HR.")
                 d.tcpFailures > 0 -> CheckItem("Conexión TCP 8000 con NTR-HR", failed,
-                    "La consola no acepta la conexión: NTR-HR no está arrancado, la IP es otra o hay aislamiento Wi-Fi.")
+                    "La consola no acepta la conexión" + (d.lastTcpError?.let { " ($it)" } ?: "") +
+                        ": NTR-HR no está arrancado, la IP es otra o hay aislamiento Wi-Fi.")
                 else -> CheckItem("Conexión TCP 8000 con NTR-HR", pending)
             }
             items += if (d.remotePlayCommands > 0) {

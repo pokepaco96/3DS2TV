@@ -35,4 +35,16 @@ class AudioSequencerTest {
         send(254); send(255); send(0); send(255); send(1)
         assertEquals(listOf(254, 255, 0, 1).map { it.toByte().toInt() }, played.map { it.first })
     }
+
+    @Test fun audioTrackBufferIsWholeFrames() {
+        // Regression from the first real-device test: 20945 bytes -> "Invalid audio buffer size"
+        val b = com.threedstwo.tv.core.ntr.AudioBufferSize.bytes(160, 0)
+        assertEquals(0, b % 4)
+        assertEquals(20948, b)
+        assertEquals(0, com.threedstwo.tv.core.ntr.AudioBufferSize.bytes(160, 30001) % 4)
+        assertEquals(30004, com.threedstwo.tv.core.ntr.AudioBufferSize.bytes(160, 30001))
+        // getMinBufferSize() may return a negative error code
+        assertEquals(20948, com.threedstwo.tv.core.ntr.AudioBufferSize.bytes(160, -2))
+        for (ms in 1..500) assertEquals(0, com.threedstwo.tv.core.ntr.AudioBufferSize.bytes(ms, 0) % 4)
+    }
 }

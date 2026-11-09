@@ -333,7 +333,12 @@ class StreamActivity : Activity(), NtrSession.Listener, InputManager.InputDevice
     }
 
     private fun pushRequest() {
-        session?.updateRequest(settings.remotePlayRequest())
+        val s = session ?: return
+        s.updateRequest(settings.remotePlayRequest())
+        if (s.diagnostics.tcpConnects == 0L) {
+            // Without the TCP control channel NTR-HR never receives these values.
+            showToast("Sin conexión TCP con NTR-HR: este cambio no llega a la consola. Cámbialo en la 3DS (X+Y → Remote Play).", 5000)
+        }
     }
 
     private fun applyAudio() {

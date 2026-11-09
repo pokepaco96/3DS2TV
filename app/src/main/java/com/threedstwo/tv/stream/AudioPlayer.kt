@@ -5,6 +5,7 @@ import android.media.AudioFormat
 import android.media.AudioTrack
 import android.os.Build
 import com.threedstwo.tv.AppLog
+import com.threedstwo.tv.core.ntr.AudioBufferSize
 import com.threedstwo.tv.core.ntr.NtrConstants
 
 /**
@@ -34,7 +35,6 @@ class AudioPlayer(private val maxLatencyMs: Int = 120, private val primeMs: Int 
             val minBuf = AudioTrack.getMinBufferSize(
                 NtrConstants.AUDIO_SAMPLE_RATE, AudioFormat.CHANNEL_OUT_STEREO, AudioFormat.ENCODING_PCM_16BIT,
             )
-            val wanted = (NtrConstants.AUDIO_SAMPLE_RATE * 4 * (maxLatencyMs + 40) / 1000)
             val builder = AudioTrack.Builder()
                 .setAudioAttributes(
                     AudioAttributes.Builder()
@@ -50,7 +50,7 @@ class AudioPlayer(private val maxLatencyMs: Int = 120, private val primeMs: Int 
                         .build(),
                 )
                 .setTransferMode(AudioTrack.MODE_STREAM)
-                .setBufferSizeInBytes(maxOf(minBuf, wanted))
+                .setBufferSizeInBytes(AudioBufferSize.bytes(maxLatencyMs + 40, minBuf))
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 builder.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
             }

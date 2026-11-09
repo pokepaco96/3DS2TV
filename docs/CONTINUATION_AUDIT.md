@@ -65,3 +65,11 @@ recuperación tras corte de Wi-Fi real. Procedimiento: `FIRST_REAL_DEVICE_TEST.m
   utilizable en tu red (criterio del plan). Si se necesita: portar `ikcp.c` modificado + FEC "fecal" de ntrviewer-hr
   (MIT/BSD, revisar licencias de cada fichero) manteniendo JPEG Compat como ruta estable.
 - Licencia MIT: los únicos fragmentos derivados siguen siendo de ntrviewer-hr (MIT), sin código GPL.
+
+## 6. Hallazgos de la primera prueba real (9-nov-2026)
+
+| # | Sev. | Ruta | Evidencia real | Corrección | Prueba |
+|---|---|---|---|---|---|
+| 18 | ALTO | `app/.../stream/AudioPlayer.kt` | Chromecast Android 14: "Invalid audio buffer size" (32728 Hz·4·160 ms = 20 945 B, no múltiplo del frame de 4 B) | `AudioBufferSize.bytes()` redondea a frames completos y tolera `getMinBufferSize()` negativo | `AudioSequencerTest.audioTrackBufferIsWholeFrames` |
+| 19 | ALTO (usabilidad) | `SessionDiagnostics`/`ConnectionChecklist`, `StreamActivity.pushRequest` | Vídeo OK con TCP 8000 rechazado: los ajustes de calidad/QoS/audio no llegaban a la consola sin aviso | Motivo del fallo TCP (rechazado/timeout) visible; aviso explícito de que los ajustes no se aplican | `ConnectionChecklistTest.videoWithoutTcpWarnsThatSettingsDoNotApply` |
+| 20 | MEDIO | `NtrSession.kt` (`receiveBufferSize`) | Lag alto percibido con calidad alta | Cola UDP del kernel de 2 MiB (≈1 s a 16 Mbit/s) reducida a 384 KiB para no acumular vídeo viejo | Pendiente de medición física con HUD |
