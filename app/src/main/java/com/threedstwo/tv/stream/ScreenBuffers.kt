@@ -5,19 +5,24 @@ import com.threedstwo.tv.core.ntr.Screen
 import com.threedstwo.tv.core.ntr.VideoFrameInfo
 
 /**
- * Double buffer per screen shared by decoder (writes BACK) and renderer (reads FRONT under [lock]).
- * The renderer holds [lock] while drawing+posting, so the decoder never mutates a bitmap being drawn.
+ * Bitmap pool per screen shared by the decoder (writes into acquired bitmaps) and the renderer
+ * (draws FRONT). [lock] is only held for short bookkeeping, never while the renderer waits for
+ * vsync: the renderer marks the bitmap it is drawing as [Slot.inUse], and [acquire] never hands
+ * out FRONT or an in-use bitmap, so the decoder can publish a new frame while the previous one is
+ * still being posted (before, publish() blocked for up to one display frame).
  */
 class ScreenBuffers {
     val lock = Object()
 
     class Slot {
         var front: Bitmap? = null
-        var back: Bitmap? = null
-        var extra: Bitmap? = null
         var frontInfo: VideoFrameInfo? = null
         var frontReceivedAt = 0L
         var fresh = false
+        /** Bitmap the renderer is drawing right now (set and cleared by the renderer under [lock]). */
+        var inUse: Bitmap? = null
+        internal val pool = ArrayList<Bitmap>(4)
+        internal val reserved = ArrayList<Bitmap>(2)
     }
 
     val slots = Array(Screen.entries.size) { Slot() }
@@ -25,30 +30,36 @@ class ScreenBuffers {
     @Volatile var newFrame = false
     var listener: (() -> Unit)? = null
 
-    /** Bitmap the decoder may write into (never the one on screen). */
-    fun backFor(screen: Screen, w: Int, h: Int): Bitmap {
-        val s = slots[screen.ordinal]
-        val b = s.back
-        if (b != null && b.width == w && b.height == h && b.isMutable) return b
-        return Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also { s.back = it }
-    }
+    private fun Slot.isFree(b: Bitmap) = b !== front && b !== inUse && reserved.none { it === b }
 
-    fun extraFor(screen: Screen, w: Int, h: Int): Bitmap {
-        val s = slots[screen.ordinal]
-        val b = s.extra
-        if (b != null && b.width == w && b.height == h) return b
-        return Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also { s.extra = it }
+    /**
+     * A w x h bitmap the decoder may write into: never FRONT, never the one being drawn, never one
+     * already acquired for this frame. Stays reserved until the next [publish]/[cancel] of that screen.
+     */
+    fun acquire(screen: Screen, w: Int, h: Int): Bitmap {
+        synchronized(lock) {
+            val s = slots[screen.ordinal]
+            for (b in s.pool) {
+                if (b.width == w && b.height == h && b.isMutable && s.isFree(b)) {
+                    s.reserved.add(b)
+                    return b
+                }
+            }
+            // Forget pooled bitmaps of another size that nobody holds (resolution change).
+            s.pool.removeAll { (it.width != w || it.height != h) && s.isFree(it) }
+            return Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also {
+                s.pool.add(it)
+                s.reserved.add(it)
+            }
+        }
     }
 
     fun publish(screen: Screen, bmp: Bitmap, info: VideoFrameInfo, receivedAt: Long) {
         synchronized(lock) {
             val s = slots[screen.ordinal]
-            if (bmp === s.extra) {
-                // swap extra <-> front so the next merge never writes the displayed bitmap
-                s.extra = s.front?.takeIf { it !== s.back }
-            } else {
-                s.back = s.front?.takeIf { it !== s.extra }
-            }
+            // A bitmap BitmapFactory allocated itself (inBitmap fallback) joins the pool.
+            if (s.pool.none { it === bmp }) s.pool.add(bmp)
+            s.reserved.clear()
             s.front = bmp
             s.frontInfo = info
             s.frontReceivedAt = receivedAt
@@ -58,9 +69,14 @@ class ScreenBuffers {
         listener?.invoke()
     }
 
+    /** Releases bitmaps acquired for a frame that will not be published (decode error). */
+    fun cancel(screen: Screen) {
+        synchronized(lock) { slots[screen.ordinal].reserved.clear() }
+    }
+
     fun clear() {
         synchronized(lock) {
-            slots.forEach { it.front = null; it.frontInfo = null; it.fresh = false }
+            slots.forEach { it.front = null; it.frontInfo = null; it.fresh = false; it.reserved.clear() }
         }
     }
 }
