@@ -55,7 +55,7 @@ class FrameDecoder(
             val f = mailbox.take(250) ?: continue
             try {
                 val info = f.info
-                val back = buffers.backFor(info.screen, info.jpegWidth, info.jpegHeight)
+                val back = buffers.acquire(info.screen, info.jpegWidth, info.jpegHeight)
                 opts.inBitmap = back
                 val t0 = System.nanoTime()
                 val bmp = try {
@@ -68,6 +68,7 @@ class FrameDecoder(
                 if (bmp == null || bmp.width != info.jpegWidth || bmp.height != info.jpegHeight) {
                     errors++
                     if (errors % 50 == 1L) AppLog.w("JPEG inválido o con tamaño inesperado (${bmp?.width}x${bmp?.height})")
+                    buffers.cancel(info.screen)
                     continue
                 }
                 val out = if (info.downsample == 2) mergeEvenOdd(bmp, info.screen, info.frameId % 2 == 1) else bmp
@@ -76,6 +77,7 @@ class FrameDecoder(
                 buffers.publish(info.screen, out, info, f.receivedAtNanos)
             } catch (e: Exception) {
                 errors++
+                buffers.cancel(f.info.screen)
                 AppLog.e("Error decodificando frame", e)
             } finally {
                 mailbox.release(f)
@@ -93,8 +95,11 @@ class FrameDecoder(
         val prev = halfPrev[screen.ordinal]?.takeIf { it.size == n } ?: curr.copyOf()
         val full = (fullTmp?.takeIf { it.size == w * h } ?: IntArray(w * h)).also { fullTmp = it }
         Downsample.mergeEvenOdd(curr, prev, full, evenOdd, w, h)
-        halfPrev[screen.ordinal] = curr.copyOf()
-        val target = buffers.extraFor(screen, w, h)
+        // Keep this half for the next merge without allocating a new array every frame.
+        val keep = halfPrev[screen.ordinal]?.takeIf { it.size == n } ?: IntArray(n)
+        System.arraycopy(curr, 0, keep, 0, n)
+        halfPrev[screen.ordinal] = keep
+        val target = buffers.acquire(screen, w, h)
         target.setPixels(full, 0, w, 0, 0, w, h)
         return target
     }

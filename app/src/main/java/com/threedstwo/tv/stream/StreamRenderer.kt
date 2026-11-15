@@ -35,6 +35,10 @@ class StreamRenderer(private val buffers: ScreenBuffers) : SurfaceHolder.Callbac
         private set
 
     private val signal = Object()
+    /** Held while drawing on the surface; surfaceDestroyed waits on it. Separate from buffers.lock so the decoder never waits for vsync. */
+    private val surfaceLock = Object()
+    private val drawBmp = arrayOfNulls<android.graphics.Bitmap>(Screen.entries.size)
+    private val drawInfo = arrayOfNulls<com.threedstwo.tv.core.ntr.VideoFrameInfo>(Screen.entries.size)
     private var dirty = true
     @Volatile private var running = false
     private var thread: Thread? = null
@@ -101,7 +105,7 @@ class StreamRenderer(private val buffers: ScreenBuffers) : SurfaceHolder.Callbac
 
     override fun surfaceDestroyed(h: SurfaceHolder) {
         // Block until the render thread is done with this surface.
-        synchronized(buffers.lock) { holder = null }
+        synchronized(surfaceLock) { holder = null }
     }
 
     private fun loop() {
@@ -116,8 +120,10 @@ class StreamRenderer(private val buffers: ScreenBuffers) : SurfaceHolder.Callbac
     }
 
     private fun drawOnce() {
-        synchronized(buffers.lock) {
+        synchronized(surfaceLock) {
             val h = holder ?: return
+            // Dequeue the surface buffer first (this may wait for vsync) WITHOUT buffers.lock,
+            // so the decoder keeps publishing meanwhile and we then draw the newest frame.
             val canvas: Canvas = try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) h.lockHardwareCanvas() else h.lockCanvas()
             } catch (e: Exception) {
@@ -129,32 +135,43 @@ class StreamRenderer(private val buffers: ScreenBuffers) : SurfaceHolder.Callbac
             } ?: return
             var hadNew = false
             val now = System.nanoTime()
-            try {
-                canvas.drawColor(Color.BLACK)
-                paint.isFilterBitmap = smooth
-                for (p in placements) {
-                    val slot = buffers.slots[p.screen.ordinal]
-                    val bmp = slot.front ?: continue
-                    val info = slot.frontInfo ?: continue
-                    p.jpegToSurface(info.jpegWidth, info.jpegHeight).toMatrixValues(values)
-                    // jpeg dims may differ from bitmap dims only for even/odd reconstruction (full width bitmap)
-                    if (bmp.width != info.jpegWidth) {
-                        p.jpegToSurface(bmp.width, info.jpegHeight).toMatrixValues(values)
-                    }
-                    matrix.setValues(values)
-                    canvas.drawBitmap(bmp, matrix, paint)
-                    if (slot.fresh) {
+            // Short critical section: pick the current fronts and mark them in use.
+            synchronized(buffers.lock) {
+                for (i in buffers.slots.indices) {
+                    val slot = buffers.slots[i]
+                    drawBmp[i] = slot.front
+                    drawInfo[i] = slot.frontInfo
+                    slot.inUse = slot.front
+                    if (slot.fresh && slot.front != null) {
                         slot.fresh = false
                         hadNew = true
                         receiveToDisplayMs.add((now - slot.frontReceivedAt) / 1e6)
                     }
                 }
+            }
+            try {
+                canvas.drawColor(Color.BLACK)
+                paint.isFilterBitmap = smooth
+                for (p in placements) {
+                    val bmp = drawBmp[p.screen.ordinal] ?: continue
+                    val info = drawInfo[p.screen.ordinal] ?: continue
+                    // jpeg dims may differ from bitmap dims only for even/odd reconstruction (full width bitmap)
+                    p.jpegToSurface(bmp.width, info.jpegHeight).toMatrixValues(values)
+                    matrix.setValues(values)
+                    canvas.drawBitmap(bmp, matrix, paint)
+                }
                 drawCursor(canvas)
             } finally {
                 try {
+                    // The hardware canvas copies bitmap contents here, so the bitmaps stay
+                    // marked in use until it returns.
                     h.unlockCanvasAndPost(canvas)
                 } catch (e: Exception) {
                     AppLog.e("unlockCanvasAndPost falló", e)
+                }
+                synchronized(buffers.lock) {
+                    for (i in buffers.slots.indices) buffers.slots[i].inUse = null
+                    java.util.Arrays.fill(drawBmp, null)
                 }
             }
             if (hadNew) presentedFrames++
