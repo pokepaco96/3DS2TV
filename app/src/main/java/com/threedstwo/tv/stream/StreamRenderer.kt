@@ -48,8 +48,12 @@ class StreamRenderer(private val buffers: ScreenBuffers) : SurfaceHolder.Callbac
     val receiveToDisplayMs = RunningAverage(120)
 
     private var softwareFallbackLogged = false
-    private val matrix = Matrix()
     private val values = FloatArray(9)
+    /** Per-screen matrix cache: recomputed only when the placement or the bitmap size changes (no per-frame allocation). */
+    private val matrices = Array(Screen.entries.size) { Matrix() }
+    private val matPlacement = arrayOfNulls<Placement>(Screen.entries.size)
+    private val matW = IntArray(Screen.entries.size)
+    private val matH = IntArray(Screen.entries.size)
     private val paint = Paint()
     private val cursorPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -156,8 +160,15 @@ class StreamRenderer(private val buffers: ScreenBuffers) : SurfaceHolder.Callbac
                     val bmp = drawBmp[p.screen.ordinal] ?: continue
                     val info = drawInfo[p.screen.ordinal] ?: continue
                     // jpeg dims may differ from bitmap dims only for even/odd reconstruction (full width bitmap)
-                    p.jpegToSurface(bmp.width, info.jpegHeight).toMatrixValues(values)
-                    matrix.setValues(values)
+                    val idx = p.screen.ordinal
+                    val matrix = matrices[idx]
+                    if (matPlacement[idx] !== p || matW[idx] != bmp.width || matH[idx] != info.jpegHeight) {
+                        p.jpegToSurface(bmp.width, info.jpegHeight).toMatrixValues(values)
+                        matrix.setValues(values)
+                        matPlacement[idx] = p
+                        matW[idx] = bmp.width
+                        matH[idx] = info.jpegHeight
+                    }
                     canvas.drawBitmap(bmp, matrix, paint)
                 }
                 drawCursor(canvas)

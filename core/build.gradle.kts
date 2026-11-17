@@ -16,3 +16,9 @@ kotlin {
 dependencies {
     testImplementation(libs.junit)
 }
+
+tasks.withType<Test>().configureEach {
+    // Benchmarks only run with ./gradlew :core:test -Pbench (never in normal test runs).
+    systemProperty("bench", if (project.hasProperty("bench")) "true" else "false")
+    testLogging { showStandardStreams = project.hasProperty("bench") }
+}

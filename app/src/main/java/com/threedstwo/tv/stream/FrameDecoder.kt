@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import com.threedstwo.tv.AppLog
 import com.threedstwo.tv.core.ntr.Downsample
+import com.threedstwo.tv.core.ntr.JpegHeader
 import com.threedstwo.tv.core.ntr.FrameMailbox
 import com.threedstwo.tv.core.ntr.Screen
 import com.threedstwo.tv.core.session.RunningAverage
@@ -23,6 +24,9 @@ class FrameDecoder(
     @Volatile var decoded = 0L
         private set
     @Volatile var errors = 0L
+        private set
+    /** Frames rejected by the header check (never decoded). */
+    @Volatile var headerRejects = 0L
         private set
 
     // even/odd downsample reconstruction state (rare console option)
@@ -55,6 +59,16 @@ class FrameDecoder(
             val f = mailbox.take(250) ?: continue
             try {
                 val info = f.info
+                // 33 ns header check (docs/OPTIMIZATION.md): reject a frame whose JPEG does not match the
+                // NTR header BEFORE decoding. One decode per frame, and the fallback below can never
+                // allocate more than the expected 240x800 bitmap.
+                val dims = JpegHeader.dimensions(f.data, f.length)
+                if (dims == JpegHeader.INVALID || JpegHeader.width(dims) != info.jpegWidth || JpegHeader.height(dims) != info.jpegHeight) {
+                    errors++
+                    headerRejects++
+                    if (headerRejects % 50 == 1L) AppLog.w("JPEG descartado antes de decodificar: cabecera ${JpegHeader.width(dims)}x${JpegHeader.height(dims)}, esperado ${info.jpegWidth}x${info.jpegHeight}")
+                    continue
+                }
                 val back = buffers.acquire(info.screen, info.jpegWidth, info.jpegHeight)
                 opts.inBitmap = back
                 val t0 = System.nanoTime()

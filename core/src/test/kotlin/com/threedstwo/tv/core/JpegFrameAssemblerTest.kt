@@ -124,4 +124,47 @@ class JpegFrameAssemblerTest {
         old.drop(2).forEach { feed(it) }
         assertEquals(listOf(2), out.map { it.first.frameId })
     }
+
+    @Test fun wholeOlderFrameArrivingAfterNewerIsNotShown() {
+        // Reordering of a complete frame: frame 9 delivered, then all of frame 8 arrives.
+        JpegPacketizer.packetize(payload(3000, 20), Screen.TOP, 9).forEach { feed(it) }
+        JpegPacketizer.packetize(payload(3000, 21), Screen.TOP, 8).forEach { feed(it) }
+        assertEquals(listOf(9), out.map { it.first.frameId })
+    }
+
+    @Test fun frameIdWrapAroundIsNewer() {
+        for (id in listOf(254, 255, 0, 1)) JpegPacketizer.packetize(payload(2000, id), Screen.TOP, id).forEach { feed(it) }
+        assertEquals(listOf(254, 255, 0, 1), out.map { it.first.frameId })
+    }
+
+    @Test fun screensAreOrderedIndependently() {
+        JpegPacketizer.packetize(payload(2000, 30), Screen.TOP, 50).forEach { feed(it) }
+        JpegPacketizer.packetize(payload(2000, 31), Screen.BOTTOM, 10).forEach { feed(it) }
+        assertEquals(2, out.size)
+    }
+
+    @Test fun consoleRestartIsAcceptedAfterSilence() {
+        var now = 0L
+        val got = mutableListOf<Int>()
+        val a = JpegFrameAssembler(listener = { info, _, _ -> got += info.frameId }, clock = { now })
+        fun send(id: Int) = JpegPacketizer.packetize(payload(2000, id), Screen.TOP, id).forEach { a.feed(it, 0, it.size) }
+        send(100)
+        now += 50_000_000; send(3)       // looks older, within 300 ms: dropped
+        assertEquals(listOf(100), got)
+        assertTrue(a.stats.stalePackets > 0)
+        now += 400_000_000; send(4)      // > 300 ms without frames: counter restarted, accepted
+        now += 16_000_000; send(5)
+        assertEquals(listOf(100, 4, 5), got)
+    }
+
+    @Test fun counterResetMidStreamRecoversWithinThreeFrames() {
+        var now = 0L
+        val got = mutableListOf<Int>()
+        val a = JpegFrameAssembler(listener = { info, _, _ -> got += info.frameId }, clock = { now })
+        fun send(id: Int) = JpegPacketizer.packetize(payload(2000, id), Screen.TOP, id).forEach { a.feed(it, 0, it.size) }
+        for (id in 60..62) { send(id); now += 16_000_000 }
+        // NTR-HR restarts encoding (quality change): ids start again at 0 with no long pause
+        for (id in 0..5) { send(id); now += 16_000_000 }
+        assertEquals(listOf(60, 61, 62, 2, 3, 4, 5), got)
+    }
 }

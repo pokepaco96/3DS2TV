@@ -318,12 +318,15 @@ class StreamActivity : Activity(), NtrSession.Listener, InputManager.InputDevice
     }
 
     private fun stopSession() {
+        // Capture the final metrics BEFORE releasing session/sender (they were read after being
+        // nulled, so "Última sesión" showed 0 kbit/s and "sin IP de consola"). Rates are not
+        // recomputed here: a few-ms interval would give meaningless FPS.
+        if (session != null) app.lastStats = buildStats(refreshRates = false)
         sender?.stop()
         sender = null
         session?.stop()
         session = null
         audio.stop()
-        app.lastStats = buildStats()
     }
 
     private fun restartSession() {
@@ -643,9 +646,10 @@ class StreamActivity : Activity(), NtrSession.Listener, InputManager.InputDevice
         netCallback = null
     }
 
-    private fun buildStats(): StreamStats {
+    private fun buildStats(refreshRates: Boolean = true): StreamStats {
         val s = session
         val now = System.nanoTime()
+        fun rate(m: RateMeter, v: Long) = if (refreshRates) m.update(v, now) else m.rate
         val st = s?.assemblerStats
         val audioState = when {
             !settings.audioEnabled -> "desactivado"
@@ -668,10 +672,10 @@ class StreamActivity : Activity(), NtrSession.Listener, InputManager.InputDevice
         return StreamStats(
             state = s?.state ?: ConnectionState.DISCONNECTED,
             transport = transport,
-            receivedFpsTop = fpsTop.update(framesTop, now),
-            receivedFpsBottom = fpsBottom.update(framesBottom, now),
-            displayedFps = fpsShown.update(renderer.presentedFrames, now),
-            kbps = kbps.update(st?.bytes ?: 0, now) * 8 / 1000,
+            receivedFpsTop = rate(fpsTop, framesTop),
+            receivedFpsBottom = rate(fpsBottom, framesBottom),
+            displayedFps = rate(fpsShown, renderer.presentedFrames),
+            kbps = rate(kbps, st?.bytes ?: 0) * 8 / 1000,
             framesIncomplete = st?.framesIncomplete ?: 0,
             framesDroppedBeforeDecode = mailbox.droppedBeforeDecode,
             framesDecodeErrors = decoder?.errors ?: 0,

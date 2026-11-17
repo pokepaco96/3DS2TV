@@ -47,7 +47,7 @@ class LayoutTest {
         assertTrue(ps[0].right <= ps[1].left)
         assertTrue(ps.all { it.left >= 0 && it.right <= 1920.01f && it.top >= 0 && it.bottom <= 1080.01f })
         val scale = ps[0].width / 320f
-        assertEquals(10f * scale, ps[1].left - ps[0].right, 0.05f)
+        assertEquals(10f * scale, ps[1].left - ps[0].right, 1f) // gaps are whole pixels
     }
 
     @Test fun integerScale() {
@@ -110,5 +110,27 @@ class LayoutTest {
         val c = TouchCursor()
         c.move(-1f, -1f, 100f, 1000f, Rotation.R0)
         assertEquals(0f, c.x, eps); assertEquals(0f, c.y, eps)
+    }
+
+    private fun isInt(v: Float) = kotlin.math.abs(v - kotlin.math.round(v)) < 1e-3f
+
+    @Test fun integerScaleIsIntegerPerScreenWithCustomSizes() {
+        for (bs in listOf(0.75f, 1f, 1.25f, 1.5f, 2f)) for (arr in com.threedstwo.tv.core.layout.Arrangement.entries) {
+            val ps = ScreenLayout.compute(1920, 1080, LayoutSettings(arrangement = arr, bottomScale = bs, integerScale = true, gap = 7))
+            for (p in ps) {
+                val f = p.width / p.screen.nativeWidth
+                assertTrue("$bs $arr ${p.screen} factor $f", isInt(f) && f >= 1f)
+                assertEquals(p.height / 240f, f, 1e-4f)
+                assertTrue("origin on whole pixels", isInt(p.left) && isInt(p.top))
+                assertTrue(p.left >= 0 && p.top >= 0 && p.right <= 1920 && p.bottom <= 1080)
+            }
+        }
+    }
+
+    @Test fun allLayoutsStartOnWholePixels() {
+        for (vm in ViewMode.entries) for (r in Rotation.entries) {
+            val ps = ScreenLayout.compute(1920, 1080, LayoutSettings(viewMode = vm, topRotation = r, bottomRotation = r, gap = 5, fill = 0.95f))
+            for (p in ps) assertTrue("$vm $r ${p.left},${p.top}", isInt(p.left) && isInt(p.top) && isInt(p.width) && isInt(p.height))
+        }
     }
 }

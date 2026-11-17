@@ -98,27 +98,48 @@ object ScreenLayout {
             val nh = sc.nativeHeight * scale
             if (rot.swapsAxes) Item(sc, nh, nw, rot) else Item(sc, nw, nh, rot)
         }
-        val gap = if (items.size > 1) s.gap.coerceIn(0, 200).toFloat() else 0f
+        val gapNative = if (items.size > 1) s.gap.coerceIn(0, 200).toFloat() else 0f
         val vertical = s.arrangement == Arrangement.VERTICAL
-        val totalW = if (vertical) items.maxOf { it.w } else items.sumOf { it.w.toDouble() }.toFloat() + gap
-        val totalH = if (vertical) items.sumOf { it.h.toDouble() }.toFloat() + gap else items.maxOf { it.h }
+        val totalW = if (vertical) items.maxOf { it.w } else items.sumOf { it.w.toDouble() }.toFloat() + gapNative
+        val totalH = if (vertical) items.sumOf { it.h.toDouble() }.toFloat() + gapNative else items.maxOf { it.h }
         val fill = s.fill.coerceIn(0.5f, 1f)
-        var k = min(surfaceWidth * fill / totalW, surfaceHeight * fill / totalH)
-        if (s.integerScale && k >= 1f) k = floor(k)
-        val originX = (surfaceWidth - totalW * k) / 2f
-        val originY = (surfaceHeight - totalH * k) / 2f
-        var cursor = 0f
-        return items.map { it ->
-            val w = it.w * k
-            val h = it.h * k
-            val p = if (vertical) {
-                Placement(it.screen, originX + (totalW * k - w) / 2f, originY + cursor, w, h, it.rotation)
-                    .also { _ -> cursor += h + gap * k }
+        val k = min(surfaceWidth * fill / totalW, surfaceHeight * fill / totalH)
+
+        // Pixel sizes. "Pixel perfect" = every screen gets a WHOLE scale factor of its own native
+        // pixels (its user size included), so nearest-neighbour shows identical square pixels.
+        val pw = FloatArray(items.size)
+        val ph = FloatArray(items.size)
+        val integer = s.integerScale && k >= 1f
+        for ((i, it) in items.withIndex()) {
+            if (integer) {
+                val userScale = (if (it.screen == Screen.TOP) s.topScale else s.bottomScale).coerceIn(0.25f, 4f)
+                val f = floor(k * userScale).coerceAtLeast(1f)
+                val nw = if (it.rotation.swapsAxes) it.screen.nativeHeight else it.screen.nativeWidth
+                val nh = if (it.rotation.swapsAxes) it.screen.nativeWidth else it.screen.nativeHeight
+                pw[i] = nw * f
+                ph[i] = nh * f
             } else {
-                Placement(it.screen, originX + cursor, originY + (totalH * k - h) / 2f, w, h, it.rotation)
-                    .also { _ -> cursor += w + gap * k }
+                pw[i] = floor(it.w * k)
+                ph[i] = floor(it.h * k)
             }
-            p
+        }
+        val gap = if (items.size > 1) floor(gapNative * k) else 0f
+        val groupW = if (vertical) pw.max() else pw.sum() + gap
+        val groupH = if (vertical) ph.sum() + gap else ph.max()
+        // Whole-pixel origins: a half-pixel offset makes nearest-neighbour columns uneven.
+        val originX = floor((surfaceWidth - groupW) / 2f).coerceAtLeast(0f)
+        val originY = floor((surfaceHeight - groupH) / 2f).coerceAtLeast(0f)
+        var cursor = 0f
+        return items.mapIndexed { i, it ->
+            val w = pw[i]
+            val h = ph[i]
+            if (vertical) {
+                Placement(it.screen, originX + floor((groupW - w) / 2f), originY + cursor, w, h, it.rotation)
+                    .also { cursor += h + gap }
+            } else {
+                Placement(it.screen, originX + cursor, originY + floor((groupH - h) / 2f), w, h, it.rotation)
+                    .also { cursor += w + gap }
+            }
         }
     }
 }

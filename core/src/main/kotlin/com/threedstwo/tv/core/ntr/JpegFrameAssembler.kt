@@ -16,6 +16,8 @@ package com.threedstwo.tv.core.ntr
 class JpegFrameAssembler(
     private val slotCount: Int = 4,
     private val listener: Listener,
+    /** Monotonic clock (ns); injectable for tests. */
+    private val clock: () -> Long = System::nanoTime,
 ) {
     fun interface Listener {
         /** [data] is only valid during the call; copy what you need. */
@@ -30,6 +32,8 @@ class JpegFrameAssembler(
         @Volatile var framesCompleted = 0L
         /** Frames abandoned because packets were lost or a newer frame overtook them. */
         @Volatile var framesIncomplete = 0L
+        /** Datagrams of frames older than the last frame delivered for that screen (dropped unseen). */
+        @Volatile var stalePackets = 0L
     }
 
     val stats = Stats()
@@ -63,10 +67,44 @@ class JpegFrameAssembler(
     private var orderCounter = 0L
     private val recentlyCompleted = IntArray(8) { -1 }
     private var recentIndex = 0
+    /** Per screen: id and time of the last frame handed to the listener ("latest frame wins"). */
+    private val lastDeliveredId = IntArray(Screen.entries.size) { -1 }
+    private val lastDeliveredAt = LongArray(Screen.entries.size)
+    /** Consecutive "stale" frames with increasing ids = the console restarted its counter. */
+    private val staleRunId = IntArray(Screen.entries.size) { -1 }
+    private val staleRun = IntArray(Screen.entries.size)
 
     fun reset() {
         slots.forEach { it.active = false }
         java.util.Arrays.fill(recentlyCompleted, -1)
+        java.util.Arrays.fill(lastDeliveredId, -1)
+        java.util.Arrays.fill(staleRunId, -1)
+        java.util.Arrays.fill(staleRun, 0)
+    }
+
+    /**
+     * True if [frameId] is older than (or equal to) the last frame delivered for [screen].
+     * Frame ids are u8 and wrap: "older" means 0..127 steps behind. If nothing was delivered for
+     * [RESTART_WINDOW_NANOS] the console probably restarted its counter, so everything is accepted.
+     */
+    private fun isStale(screenIdx: Int, frameId: Int, now: Long): Boolean {
+        val last = lastDeliveredId[screenIdx]
+        if (last < 0) return false
+        val ahead = (frameId - last) and 0xFF
+        if (ahead in 1..127) return false
+        if (now - lastDeliveredAt[screenIdx] >= RESTART_WINDOW_NANOS) return false
+        // NTR-HR resets CURRENT_FRAME_IDS to 0 when it restarts encoding (e.g. after a quality change):
+        // a run of "old" ids that keep increasing is a new stream, not reordering.
+        if (frameId == staleRunId[screenIdx]) return true // another packet of the same stale frame
+        if (staleRunId[screenIdx] >= 0 && frameId == ((staleRunId[screenIdx] + 1) and 0xFF)) staleRun[screenIdx]++ else staleRun[screenIdx] = 1
+        staleRunId[screenIdx] = frameId
+        if (staleRun[screenIdx] >= RESTART_RUN) {
+            lastDeliveredId[screenIdx] = -1
+            staleRun[screenIdx] = 0
+            staleRunId[screenIdx] = -1
+            return false
+        }
+        return true
     }
 
     /** Feed one datagram already classified as [PacketKind.VIDEO_JPEG]. Returns false if it was rejected. */
@@ -94,7 +132,16 @@ class JpegFrameAssembler(
             return true
         }
 
-        val slot = findOrAllocate(key, hdr0, id1, hdr2)
+        var slot: Slot? = null
+        for (sl in slots) if (sl.active && sl.key == key) { slot = sl; break }
+        if (slot == null) {
+            // New frame: drop it right away if it is older than what is already on screen.
+            if (isStale(if (id1 and 0x01 != 0) Screen.TOP.ordinal else Screen.BOTTOM.ordinal, hdr0, clock())) {
+                stats.stalePackets++
+                return true
+            }
+            slot = allocate(key, hdr0, id1, hdr2)
+        }
         var index = hdr3
         if (index + 128 < slot.maxPacket) index += 256
         if (index >= NtrConstants.MAX_PACKETS_PER_FRAME) return reject()
@@ -121,8 +168,7 @@ class JpegFrameAssembler(
         return false
     }
 
-    private fun findOrAllocate(key: Int, hdr0: Int, id1: Int, hdr2: Int): Slot {
-        for (s in slots) if (s.active && s.key == key) return s
+    private fun allocate(key: Int, hdr0: Int, id1: Int, hdr2: Int): Slot {
         var target: Slot? = slots.firstOrNull { !it.active }
         if (target == null) {
             target = slots.minByOrNull { it.order }!!
@@ -153,7 +199,17 @@ class JpegFrameAssembler(
                 stats.framesIncomplete++
             }
         }
+        val idx = info.screen.ordinal
+        lastDeliveredId[idx] = info.frameId
+        lastDeliveredAt[idx] = clock()
         stats.framesCompleted++
         listener.onFrame(info, slot.data, slot.totalSize)
+    }
+
+    companion object {
+        /** No frame for this long on a screen = treat the next ids as a new stream (console restart). */
+        const val RESTART_WINDOW_NANOS = 300_000_000L
+        /** This many consecutive increasing "old" frame ids are accepted as a counter restart. */
+        const val RESTART_RUN = 3
     }
 }
