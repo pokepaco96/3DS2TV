@@ -1,0 +1,10 @@
+{
+  "_comment": "Copy to lab.config.json (ignored by Git) and fill in. Never commit real addresses.",
+  "adbPath": "",
+  "deviceSerial": "",
+  "chromecastAdbHost": "",
+  "consoleIp": "",
+  "package": "com.threedstwo.tv",
+  "resultsDir": "results",
+  "defaultProfile": "ULTRA_LOW_LATENCY"
+}

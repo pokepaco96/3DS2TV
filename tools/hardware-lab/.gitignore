@@ -1,0 +1,3 @@
+# Local, private: device addresses and measurement results never go to Git.
+lab.config.json
+results/

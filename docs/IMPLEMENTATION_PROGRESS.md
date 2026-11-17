@@ -31,6 +31,13 @@ Chromecast con Google TV 4K, Android 14 · New 3DS XL con NTR-HR. Decodificació
 - `:app:testDebugUnitTest` 2, 0 fallos · `:app:lintDebug` sin incidencias · `:app:assembleDebug` OK.
 - Test instrumentado (emulador Android TV): **no ejecutado en esta fase** (no hay KVM local; CI solo corre tras push).
 
+## Laboratorio físico (preparado, sin ejecutar en hardware)
+- `tools/hardware-lab/` (PowerShell) + `docs/HARDWARE_LAB.md`; config privada `lab.config.json` ignorada por Git.
+- App (solo debug): `LabControlReceiver` (START/STOP/EXPORT_METRICS, permiso DUMP) y `lab_autostart`; ausente del release.
+- Scripts **no ejecutados** aquí (sin PowerShell permitido ni dispositivos): solo comprobación estática de sintaxis.
+- Siguiente paso en casa: `Check-Requirements` → `Connect-Chromecast -SaveSerial` → `Build-Apk` → `Install-Apk` →
+  `Run-Benchmark -Label base` ×3 y anotar aquí los resultados (commit, APK SHA-256, perfil, juego).
+
 ## Pendiente (bloqueos reales)
 1. Push de la rama y CI (requiere autorización del usuario) → APK para probar.
 2. Hardware: medir con cámara la latencia total y el efecto de `requestUnbufferedDispatch`; comprobar perfiles y calidad adaptativa en Wi-Fi real; 30–60 min de sesión; audio con cambio de salida HDMI.
