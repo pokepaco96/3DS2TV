@@ -178,6 +178,12 @@ class StreamEndToEndTest {
             // Input redirection keep-alive reaches the console address with the neutral state
             assertTrue("input packets: ${inputPackets.get()}", waitFor(5000) { inputNeutral.get() > 10 })
 
+            // Hardware-lab export (debug builds): same shell command the PowerShell scripts use.
+            val out = shell("am broadcast -n ${ctx.packageName}/.lab.LabControlReceiver -a com.threedstwo.tv.debug.EXPORT_METRICS")
+            assertTrue("export result: $out", out.contains("OK"))
+            val json = java.io.File(java.io.File(ctx.getExternalFilesDir(null), "lab"), "latest.json").readText()
+            assertTrue(json, json.contains("\"state\":\"STREAMING\"") && json.contains("\"fps_presented\""))
+
             // Leave to another screen and come back (e.g. "Configurar mando…" from the in-session menu):
             // the pipeline must restart and frames must flow again.
             val help = inst.startActivitySync(Intent(ctx, HelpActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
@@ -194,6 +200,22 @@ class StreamEndToEndTest {
             activity.finish()
         }
         assertTrue("disconnected after finish", waitFor(10000) { SessionProbe.state == ConnectionState.DISCONNECTED })
+    }
+
+    private fun shell(cmd: String): String {
+        val pfd = inst.uiAutomation.executeShellCommand(cmd)
+        return android.os.ParcelFileDescriptor.AutoCloseInputStream(pfd).bufferedReader().readText()
+    }
+
+    @Test fun labStartBroadcastSavesSettingsAndRejectsBadValues() {
+        val ok = shell("am broadcast -n ${ctx.packageName}/.lab.LabControlReceiver -a com.threedstwo.tv.debug.START --es ip 192.168.1.23 --es profile ULTRA_LOW_LATENCY --es audio false")
+        assertTrue(ok, ok.contains("OK settings saved"))
+        val s = ThreeDsTvApp.of(ctx).loadSettings()
+        assertEquals("192.168.1.23", s.consoleIp)
+        assertEquals(70, s.jpegQuality)
+        val bad = shell("am broadcast -n ${ctx.packageName}/.lab.LabControlReceiver -a com.threedstwo.tv.debug.START --es quality 500")
+        assertTrue(bad, bad.contains("ERROR"))
+        assertEquals(70, ThreeDsTvApp.of(ctx).loadSettings().jpegQuality)
     }
 
     @Test fun appIsAnAndroidTvLauncherAppWithBanner() {

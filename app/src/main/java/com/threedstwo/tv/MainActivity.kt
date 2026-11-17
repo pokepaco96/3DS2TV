@@ -19,6 +19,11 @@ import com.threedstwo.tv.ui.Ui
 
 /** Home screen: console IP, connect, settings, controller, diagnostics, help. 100 % D-pad. */
 class MainActivity : Activity() {
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+    }
+
     private lateinit var ipField: EditText
     private lateinit var modeButton: android.widget.Button
     private lateinit var info: TextView
@@ -76,6 +81,12 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        // Hardware lab (debug builds only): `am start ... --ez lab_autostart true` opens the stream directly.
+        if (BuildConfig.DEBUG && intent.getBooleanExtra(LabHooks.EXTRA_AUTOSTART, false)) {
+            intent.removeExtra(LabHooks.EXTRA_AUTOSTART)
+            startActivity(Intent(this, StreamActivity::class.java))
+            return
+        }
         val s = app.loadSettings()
         if (ipField.text.isNullOrBlank()) ipField.setText(s.consoleIp)
         refresh()

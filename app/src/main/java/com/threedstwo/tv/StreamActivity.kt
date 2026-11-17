@@ -280,6 +280,7 @@ class StreamActivity : Activity(), InputManager.InputDeviceListener {
 
     override fun onStart() {
         super.onStart()
+        LabHooks.stream = java.lang.ref.WeakReference(this)
         settings = app.loadSettings()
         tracker.preferredDescriptor = settings.preferredController
         applyVisualSettings()
@@ -304,6 +305,7 @@ class StreamActivity : Activity(), InputManager.InputDeviceListener {
         decoder?.stop()
         decoder = null
         SessionProbe.state = ConnectionState.DISCONNECTED
+        if (LabHooks.stream?.get() === this) LabHooks.stream = null
         super.onStop()
     }
 
