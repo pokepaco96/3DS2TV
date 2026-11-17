@@ -18,7 +18,10 @@ import org.junit.Test
 
 class SettingsTest {
     @Test fun defaultsWhenEmpty() {
-        assertEquals(AppSettings(), AppSettings.load(MemoryStore()))
+        val fresh = AppSettings.load(MemoryStore())
+        assertEquals(com.threedstwo.tv.core.settings.PerformanceProfile.ULTRA_LOW_LATENCY.applyTo(AppSettings()), fresh)
+        assertEquals(70, fresh.jpegQuality)
+        assertEquals(10, fresh.qosMbps)
     }
 
     @Test fun roundTrip() {
@@ -29,7 +32,7 @@ class SettingsTest {
             mapping = com.threedstwo.tv.core.input.ButtonMapping.preset(MappingPreset.XBOX_LABELS).with(PadControl.R3, Action.TOUCH),
             layout = AppSettings().layout.copy(viewMode = ViewMode.BOTTOM_ONLY, arrangement = Arrangement.HORIZONTAL,
                 bottomFirst = true, topRotation = Rotation.R270, bottomRotation = Rotation.R90, gap = 20, integerScale = true),
-            circleDeadzone = 0.3f, cursorSpeed = 500, touchButton = PadControl.L1, tvRemoteAsPad = true, preferredController = "abc",
+            circleDeadzone = 0.3f, cursorSpeed = 500, profile = com.threedstwo.tv.core.settings.PerformanceProfile.QUALITY, adaptiveQuality = false, touchButton = PadControl.L1, tvRemoteAsPad = true, preferredController = "abc",
         )
         val store = MemoryStore()
         s.save(store)

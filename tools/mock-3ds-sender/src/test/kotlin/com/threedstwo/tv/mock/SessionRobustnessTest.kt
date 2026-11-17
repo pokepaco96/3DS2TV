@@ -256,4 +256,38 @@ class SessionRobustnessTest {
         assertTrue(p.count > 150)
         assertTrue("p95 ${p.p95} ms", p.p95 < 5.0)
     }
+
+    @Test fun qualityChangeWithRealisticFrameIdResetKeepsStreaming() {
+        // The fake console now resets per-screen frame ids on every 901 (like NTR-HR).
+        val c = console()
+        val rec = Rec()
+        val s = session(rec, "127.0.0.1", c.boundControlPort)
+        assertTrue(waitFor { s.state == ConnectionState.STREAMING && rec.frames.get() > 30 })
+        repeat(3) { k ->
+            val before = rec.frames.get()
+            s.updateRequest(RemotePlayRequest(jpegQuality = 60 + k * 10))
+            assertTrue("frames keep flowing after change $k", waitFor(3000) { rec.frames.get() > before + 30 })
+        }
+        assertEquals(ConnectionState.STREAMING, s.state)
+    }
+
+    @Test fun jitterCorruptionAndSlowTcpDoNotBreakTheSession() {
+        val c = console { jitterMs = 8; corruptProbability = 0.02; tcpReplyDelayMs = 150; reorder = true }
+        val rec = Rec()
+        val s = session(rec, "127.0.0.1", c.boundControlPort)
+        assertTrue(waitFor(8000) { s.state == ConnectionState.STREAMING && rec.frames.get() > 40 })
+        assertEquals(0L, s.diagnostics.tcpProtocolErrors)
+    }
+
+    @Test fun refusedTcpWithStreamingConsoleIsReported() {
+        val port = freeUdpPort()
+        // Real case seen on hardware: console already streaming, TCP 8000 refused (nothing listening).
+        val c = console()
+        c.streamTo(InetAddress.getByName("127.0.0.1"), port)
+        val rec = Rec()
+        val s = session(rec, "127.0.0.1", freeTcpPort(), port = port)
+        assertTrue(waitFor { s.state == ConnectionState.STREAMING })
+        assertNull(s.lastSentRequest) // nothing ever reached the console
+        assertTrue(waitFor { s.diagnostics.tcpConnects + s.diagnostics.tcpFailures > 0 })
+    }
 }

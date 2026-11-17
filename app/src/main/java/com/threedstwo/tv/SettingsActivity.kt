@@ -6,6 +6,7 @@ import com.threedstwo.tv.core.layout.Arrangement
 import com.threedstwo.tv.core.layout.Rotation
 import com.threedstwo.tv.core.layout.ViewMode
 import com.threedstwo.tv.core.settings.AppSettings
+import com.threedstwo.tv.core.settings.PerformanceProfile
 import com.threedstwo.tv.core.settings.ScalingFilter
 import com.threedstwo.tv.core.session.ConnectMode
 import com.threedstwo.tv.ui.OptionList
@@ -47,9 +48,12 @@ class SettingsActivity : Activity() {
         m.choice("Conexión", ConnectMode.entries, { s.connectMode }, {
             if (it == ConnectMode.ACTIVE) "Conectar a la consola (TCP 8000)" else "Pasivo: la consola inicia Remote Play"
         }) { v -> update { it.copy(connectMode = v) } }
-        m.intRange("Calidad JPEG", 30..100 step 5, { s.jpegQuality }) { v -> update { it.copy(jpegQuality = v) } }
-        m.note("Recomendado 75–90. Más calidad = menos FPS.")
-        m.intRange("Ancho de banda (QoS)", 4..20, { s.qosMbps }, " Mbps") { v -> update { it.copy(qosMbps = v) } }
+        m.choice("Perfil de rendimiento", PerformanceProfile.entries, { s.profile }, { it.label }) { v -> update { v.applyTo(it) }; m.refreshAll() }
+        m.note("Ultra baja latencia: JPEG 70, 10 Mbps, audio ≤60 ms. Equilibrado: 80, 12 Mbps. Calidad: 90, 16 Mbps. Menos calidad = frames más pequeños = menos pérdidas Wi-Fi y más FPS en la 3DS.")
+        m.toggle("Calidad adaptativa (según pérdidas)", { s.adaptiveQuality }) { v -> update { it.copy(adaptiveQuality = v) } }
+        m.note("Baja la calidad 10 puntos si más del 12 % de frames llega incompleto 2 s seguidos y la sube 5 tras 8 s limpios, nunca por encima de la elegida. Requiere conexión TCP con NTR-HR.")
+        m.intRange("Calidad JPEG", 30..100 step 5, { s.jpegQuality }) { v -> update { it.copy(jpegQuality = v, profile = PerformanceProfile.CUSTOM) }; m.refreshAll() }
+        m.intRange("Ancho de banda (QoS)", 4..20, { s.qosMbps }, " Mbps") { v -> update { it.copy(qosMbps = v, profile = PerformanceProfile.CUSTOM) }; m.refreshAll() }
         m.toggle("Prioridad pantalla superior", { s.topPriority }) { v -> update { it.copy(topPriority = v) } }
         m.intRange("Factor de prioridad", 0..4, { s.priorityFactor }) { v -> update { it.copy(priorityFactor = v) } }
         m.note("La pantalla prioritaria recibe N frames por cada frame de la otra. 0 = solo la prioritaria (máximos FPS).")

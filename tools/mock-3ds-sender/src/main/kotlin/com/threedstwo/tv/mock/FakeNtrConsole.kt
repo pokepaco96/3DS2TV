@@ -40,6 +40,8 @@ class FakeNtrConsole(
     var lossProbability: Double = 0.0,
     var reorder: Boolean = false,
     val log: (String) -> Unit = {},
+    /** Deterministic randomness for loss/reorder/jitter/corruption (reproducible runs). */
+    seed: Long = 42,
 ) {
     data class RemotePlayCommand(val args: IntArray, val from: InetAddress)
 
@@ -68,6 +70,14 @@ class FakeNtrConsole(
     @Volatile var dropEndPackets = false
     /** Send each video packet twice. */
     @Volatile var duplicatePackets = false
+    /** Random extra delay 0..jitterMs before each frame (Wi-Fi jitter). */
+    @Volatile var jitterMs = 0
+    /** Probability of flipping a random payload byte in a video packet (corrupted JPEG data). */
+    @Volatile var corruptProbability = 0.0
+    /** Delay before every TCP reply (slow console / busy Wi-Fi). */
+    @Volatile var tcpReplyDelayMs = 0L
+    /** Accept and immediately drop every TCP connection (a refused connect is simulated with a closed port instead). */
+    @Volatile var refuseTcp = false
     @Volatile var running = false
         private set
     @Volatile private var target: InetSocketAddress? = null
@@ -80,7 +90,10 @@ class FakeNtrConsole(
     private var udp: DatagramSocket? = null
     private var inputSocket: DatagramSocket? = null
     private val threads = mutableListOf<Thread>()
-    private val random = Random(42)
+    private val random = Random(seed)
+    /** Per-screen frame counters, reset on every accepted Remote Play command like NTR-HR's CURRENT_FRAME_IDS. */
+    private val frameIds = IntArray(2)
+    @Volatile private var resetFrameIds = false
 
     val boundControlPort: Int get() = server?.localPort ?: controlPort
     val boundInputPort: Int get() = inputSocket?.localPort ?: inputPort
@@ -134,6 +147,7 @@ class FakeNtrConsole(
             } catch (_: IOException) {
                 break
             }
+            if (refuseTcp) { runCatching { s.close() }; continue }
             spawn("fake-conn") { handle(s) }
         }
     }
@@ -151,6 +165,7 @@ class FakeNtrConsole(
                     if (p.dataLen > 0) readFully(input, ByteArray(p.dataLen))
                     when (p.cmd) {
                         NtrConstants.CMD_HEARTBEAT -> {
+                            if (tcpReplyDelayMs > 0) Thread.sleep(tcpReplyDelayMs)
                             heartbeats.incrementAndGet()
                             val text = if (heartbeats.get() == 1) "fake ntr-hr ready\n".toByteArray() else ByteArray(0)
                             val reply = NtrControlPacket(
@@ -172,6 +187,7 @@ class FakeNtrConsole(
                                 log("901 ignored (fault injection)")
                             } else {
                                 quality = p.args[1]
+                                resetFrameIds = true // NTR-HR restarts its encoder threads: frame ids restart at 0
                                 topPriority = (p.args[0] shr 8) and 1 == 1
                                 factor = p.args[0] and 0xFF
                                 val port = if (p.args[3] == NtrConstants.GUARDING_MAGIC) p.args[4] and 0xFFFF else NtrConstants.DEFAULT_VIEWER_PORT
@@ -211,7 +227,15 @@ class FakeNtrConsole(
                         send(byteArrayOf(0x55, 0x7F, 0x13, 0x10, 0, 0, 0, 0), t)
                         continue
                     }
-                    val packets = JpegPacketizer.packetize(TestPattern.frameJpeg(sc, frame, quality), sc, frame and 0xFF)
+                    if (resetFrameIds) { frameIds.fill(0); resetFrameIds = false }
+                    val id = frameIds[sc.ordinal]
+                    frameIds[sc.ordinal] = (id + 1) and 0xFF
+                    if (jitterMs > 0) Thread.sleep(random.nextInt(jitterMs + 1).toLong())
+                    val packets = JpegPacketizer.packetize(TestPattern.frameJpeg(sc, frame, quality), sc, id).map { pk ->
+                        if (corruptProbability > 0 && random.nextDouble() < corruptProbability && pk.size > 8) {
+                            pk.copyOf().also { it[4 + random.nextInt(it.size - 4)] = random.nextInt().toByte() }
+                        } else pk
+                    }
                     var ordered = if (reorder) packets.shuffled(random) else packets
                     if (dropEndPackets) ordered = ordered.filter { (it[1].toInt() and NtrConstants.HDR1_END_FLAG) == 0 }
                     for (p in ordered) if (random.nextDouble() >= lossProbability) {

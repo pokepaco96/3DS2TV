@@ -15,6 +15,12 @@ private fun usage() {
           --fps N            frames per second per stream slot (default 60)
           --loss P           packet loss probability 0..1 (default 0)
           --reorder          shuffle packets inside each frame
+          --duplicate        send every video packet twice
+          --jitter-ms N      random 0..N ms delay before each frame
+          --corrupt P        probability of corrupting a byte of a video packet
+          --tcp-delay-ms N   delay every TCP reply by N ms
+          --refuse-tcp       close every TCP connection (console without port 8000)
+          --seed N           deterministic random seed (default 42)
 
         Push mode (like Remote Play started from the console menu):
           --push IP[:PORT]   stream directly to a viewer without waiting for TCP (default port 8001)
@@ -31,6 +37,12 @@ fun main(args: Array<String>) {
     var reorder = false
     var push: String? = null
     var audio = false
+    var duplicate = false
+    var jitter = 0
+    var corrupt = 0.0
+    var tcpDelay = 0L
+    var refuseTcp = false
+    var seed = 42L
     var i = 0
     while (i < args.size) {
         when (args[i]) {
@@ -41,12 +53,23 @@ fun main(args: Array<String>) {
             "--reorder" -> reorder = true
             "--push" -> push = args[++i]
             "--audio" -> audio = true
+            "--duplicate" -> duplicate = true
+            "--jitter-ms" -> jitter = args[++i].toInt()
+            "--corrupt" -> corrupt = args[++i].toDouble()
+            "--tcp-delay-ms" -> tcpDelay = args[++i].toLong()
+            "--refuse-tcp" -> refuseTcp = true
+            "--seed" -> seed = args[++i].toLong()
             "-h", "--help" -> { usage(); return }
             else -> { println("unknown option ${args[i]}"); usage(); return }
         }
         i++
     }
-    val console = FakeNtrConsole(controlPort, inputPort, fps = fps, lossProbability = loss, reorder = reorder, log = { println(it) })
+    val console = FakeNtrConsole(controlPort, inputPort, fps = fps, lossProbability = loss, reorder = reorder, log = { println(it) }, seed = seed)
+    console.duplicatePackets = duplicate
+    console.jitterMs = jitter
+    console.corruptProbability = corrupt
+    console.tcpReplyDelayMs = tcpDelay
+    console.refuseTcp = refuseTcp
     console.start()
     push?.let {
         val parts = it.split(':')

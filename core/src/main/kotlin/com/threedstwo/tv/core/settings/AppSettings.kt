@@ -54,7 +54,12 @@ data class AppSettings(
     /** Descriptor of the preferred controller (InputDevice.getDescriptor), empty = first available. */
     val preferredController: String = "",
     val maxReconnectAttempts: Int = 8,
+    val profile: PerformanceProfile = PerformanceProfile.CUSTOM,
+    /** Lower/raise the JPEG quality sent to NTR-HR from measured frame loss (needs the TCP channel). */
+    val adaptiveQuality: Boolean = true,
 ) {
+    val audioMaxLatencyMs: Int get() = profile.audioMaxLatencyMs
+
     fun remotePlayRequest() = RemotePlayRequest(
         topScreenPriority = topPriority,
         priorityFactor = priorityFactor,
@@ -103,6 +108,8 @@ data class AppSettings(
                 "tvRemoteAsPad" to tvRemoteAsPad.toString(),
                 "preferredController" to preferredController,
                 "maxReconnectAttempts" to maxReconnectAttempts.toString(),
+                "profile" to profile.name,
+                "adaptiveQuality" to adaptiveQuality.toString(),
             ),
         )
     }
@@ -123,7 +130,7 @@ data class AppSettings(
             val d = AppSettings()
             val dl = d.layout
             val preset = store.enum("mappingPreset", d.mappingPreset)
-            return AppSettings(
+            val loaded = AppSettings(
                 consoleIp = store.getString("consoleIp") ?: d.consoleIp,
                 connectMode = store.enum("connectMode", d.connectMode),
                 jpegQuality = store.int("jpegQuality", d.jpegQuality, NtrConstants.JPEG_QUALITY_MIN..NtrConstants.JPEG_QUALITY_MAX),
@@ -162,7 +169,12 @@ data class AppSettings(
                 tvRemoteAsPad = store.bool("tvRemoteAsPad", d.tvRemoteAsPad),
                 preferredController = store.getString("preferredController") ?: d.preferredController,
                 maxReconnectAttempts = store.int("maxReconnectAttempts", d.maxReconnectAttempts, 1..50),
+                // New installs start on the recommended low-latency profile; existing ones keep their values.
+                profile = store.enum("profile", d.profile),
+                adaptiveQuality = store.bool("adaptiveQuality", d.adaptiveQuality),
             )
+            // A fresh install starts on the recommended low-latency profile; existing users keep their values.
+            return if (store.getString("jpegQuality") == null) PerformanceProfile.ULTRA_LOW_LATENCY.applyTo(loaded) else loaded
         }
 
     }

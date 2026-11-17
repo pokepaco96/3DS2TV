@@ -48,6 +48,8 @@ import com.threedstwo.tv.core.session.SessionConfig
 import com.threedstwo.tv.core.session.StreamStats
 import com.threedstwo.tv.core.settings.AppSettings
 import com.threedstwo.tv.core.settings.CursorStick
+import com.threedstwo.tv.core.settings.PerformanceProfile
+import com.threedstwo.tv.core.session.AdaptiveQuality
 import com.threedstwo.tv.core.settings.ScalingFilter
 import com.threedstwo.tv.input.GamepadTracker
 import com.threedstwo.tv.net.NetworkInfo
@@ -223,9 +225,13 @@ class StreamActivity : Activity(), InputManager.InputDeviceListener {
         m.toggle("Escalado entero (píxel perfecto)", { settings.layout.integerScale }) { v -> update { it.copy(layout = it.layout.copy(integerScale = v)) } }
         m.choice("Margen de pantalla", listOf(100, 95, 90, 85), { (settings.layout.fill * 100).toInt() }, { "$it %" }) { v -> update { it.copy(layout = it.layout.copy(fill = v / 100f)) } }
 
-        m.header("Calidad (se envía a NTR-HR)")
-        m.intRange("Calidad JPEG", 30..100 step 5, { settings.jpegQuality }) { v -> update { it.copy(jpegQuality = v) }; pushRequest() }
-        m.intRange("Ancho de banda (QoS)", 4..20, { settings.qosMbps }, " Mbps") { v -> update { it.copy(qosMbps = v) }; pushRequest() }
+        m.header("Rendimiento (se envía a NTR-HR)")
+        m.choice("Perfil", PerformanceProfile.entries, { settings.profile }, { it.label }) { v ->
+            update { v.applyTo(it) }; applyAudio(); pushRequest(); m.refreshAll()
+        }
+        m.toggle("Calidad adaptativa (según pérdidas)", { settings.adaptiveQuality }) { v -> update { it.copy(adaptiveQuality = v) }; pushRequest() }
+        m.intRange("Calidad JPEG", 30..100 step 5, { settings.jpegQuality }) { v -> update { it.copy(jpegQuality = v, profile = PerformanceProfile.CUSTOM) }; pushRequest(); m.refreshAll() }
+        m.intRange("Ancho de banda (QoS)", 4..20, { settings.qosMbps }, " Mbps") { v -> update { it.copy(qosMbps = v, profile = PerformanceProfile.CUSTOM) }; pushRequest(); m.refreshAll() }
         m.toggle("Prioridad pantalla superior", { settings.topPriority }) { v -> update { it.copy(topPriority = v) }; pushRequest() }
         m.intRange("Factor de prioridad", 0..4, { settings.priorityFactor }) { v -> update { it.copy(priorityFactor = v) }; pushRequest() }
         m.note("Factor 0 = solo se emite la pantalla prioritaria.")
@@ -314,7 +320,7 @@ class StreamActivity : Activity(), InputManager.InputDeviceListener {
         val cfg = SessionConfig(
             consoleIp = ip,
             mode = settings.connectMode,
-            request = settings.remotePlayRequest(),
+            request = run { adaptive.ceiling = settings.jpegQuality; adaptive.reset(settings.jpegQuality); settings.remotePlayRequest() },
             maxReconnectAttempts = settings.maxReconnectAttempts,
         )
         framesTop = 0; framesBottom = 0
@@ -346,9 +352,18 @@ class StreamActivity : Activity(), InputManager.InputDeviceListener {
         startSession()
     }
 
+    /** Runtime JPEG quality decided by [adaptive] (never persisted: the setting stays the ceiling). */
+    private val adaptive = AdaptiveQuality(ceiling = 80)
+
+    private fun effectiveRequest() = settings.remotePlayRequest().let { r ->
+        if (settings.adaptiveQuality) r.copy(jpegQuality = minOf(r.jpegQuality, adaptive.quality)) else r
+    }
+
     private fun pushRequest() {
         val s = session ?: return
-        s.updateRequest(settings.remotePlayRequest())
+        adaptive.ceiling = settings.jpegQuality
+        if (!settings.adaptiveQuality) adaptive.reset(settings.jpegQuality)
+        s.updateRequest(effectiveRequest())
         if (s.diagnostics.tcpConnects == 0L) {
             // Without the TCP control channel NTR-HR never receives these values.
             showToast("Sin conexión TCP con NTR-HR: este cambio no llega a la consola. Cámbialo en la 3DS (X+Y → Remote Play).", 5000)
@@ -356,6 +371,7 @@ class StreamActivity : Activity(), InputManager.InputDeviceListener {
     }
 
     private fun applyAudio() {
+        audio.maxLatencyMs = settings.audioMaxLatencyMs
         if (settings.audioEnabled) audio.start(settings.audioVolume / 100f) else audio.stop()
     }
 
@@ -678,7 +694,8 @@ class StreamActivity : Activity(), InputManager.InputDeviceListener {
         if (s.config.mode == ConnectMode.PASSIVE) return "modo pasivo: ajustes en la 3DS"
         val sent = s.lastSentRequest ?: return "sin TCP: calidad/QoS no aplicadas"
         val base = "calidad ${sent.jpegQuality} · QoS ${sent.qosMbps} Mbps" + if (sent.audio) " · audio" else ""
-        return if (s.requestPending) "$base (cambio pendiente)" else "$base enviada"
+        val adapt = if (settings.adaptiveQuality) " · adaptativa (pérdida %.0f %%)".format(adaptive.lastLossRatio * 100) else ""
+        return (if (s.requestPending) "$base (cambio pendiente)" else "$base escrita en TCP (NTR no confirma)") + adapt
     }
 
     private fun buildStats(refreshRates: Boolean = true): StreamStats {
@@ -730,10 +747,23 @@ class StreamActivity : Activity(), InputManager.InputDeviceListener {
         )
     }
 
+    private var hudTicks = 0
+
+    /** Once per second: adapt the JPEG quality to the measured frame loss (only with the TCP channel). */
+    private fun adaptQuality() {
+        val s = session ?: return
+        if (!settings.adaptiveQuality || s.state != ConnectionState.STREAMING || s.lastSentRequest == null) return
+        val st = s.assemblerStats
+        val q = adaptive.onWindow(st.framesCompleted, st.framesIncomplete) ?: return
+        AppLog.i("Calidad adaptativa: $q (pérdida de frames %.0f %%)".format(adaptive.lastLossRatio * 100))
+        s.updateRequest(effectiveRequest())
+    }
+
     private val hudUpdater = object : Runnable {
         override fun run() {
             val st = buildStats()
             app.lastStats = st
+            if (++hudTicks % 2 == 0) adaptQuality()
             SessionProbe.state = st.state
             SessionProbe.presentedFrames = renderer.presentedFrames
             SessionProbe.decodedFrames = decoder?.decoded ?: 0
