@@ -30,6 +30,10 @@ jobs:
       - name: Unit + integration tests (JVM)
         run: ./gradlew --no-daemon :core:test :tools:mock-3ds-sender:test :app:testDebugUnitTest
 
+      - name: JVM micro-benchmarks (report only, never blocks)
+        continue-on-error: true
+        run: ./gradlew --no-daemon :core:test -Pbench --tests '*bench*' --rerun-tasks | grep BENCH | tee benchmarks.txt
+
       - name: Android lint
         run: ./gradlew --no-daemon :app:lintDebug
 
@@ -62,6 +66,7 @@ jobs:
             core/build/reports/
             tools/mock-3ds-sender/build/reports/
             app/build/reports/
+            benchmarks.txt
 
   emulator:
     name: Prueba end-to-end en emulador Android TV

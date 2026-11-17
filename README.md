@@ -14,6 +14,10 @@ New 3DS XL (Luma3DS + NTR-HR) ──Wi-Fi/LAN──▶ 3DS2TV (APK en el Chromec
 > un Chromecast reales.** Guía de la primera prueba: [`docs/FIRST_REAL_DEVICE_TEST.md`](docs/FIRST_REAL_DEVICE_TEST.md) ·
 > registro: [`docs/HARDWARE_VALIDATION.md`](docs/HARDWARE_VALIDATION.md) · auditoría: [`docs/CONTINUATION_AUDIT.md`](docs/CONTINUATION_AUDIT.md).
 
+> ⚠️ **Solo para tu red local privada.** 3DS2TV no está diseñado para exponerse a Internet: no abras puertos en el
+> router ni lo uses en redes públicas. Optimizaciones y mediciones: [`docs/OPTIMIZATION.md`](docs/OPTIMIZATION.md) ·
+> cambios: [`CHANGELOG.md`](CHANGELOG.md) · progreso: [`docs/IMPLEMENTATION_PROGRESS.md`](docs/IMPLEMENTATION_PROGRESS.md).
+
 ## Funciones y nivel de evidencia
 
 Leyenda: ✅ sí · — no aplica / no probado · ❌ no implementado. "Simulador" = tests JVM con `FakeNtrConsole` por sockets
@@ -27,7 +31,8 @@ reales; "Emulador" = test instrumentado en Android TV API 31 x86; "Hardware" = N
 | Prueba de conexión en Diagnóstico (OK solo con JPEG decodificados) | ✅ | — | — | — | pendiente |
 | Solo superior / inferior / ambas; vertical/horizontal; intercambio; rotación y tamaño por pantalla | ✅ | ✅ | — | dibujo ✅ | pendiente |
 | Proporción conservada, píxel nítido/bilineal, escalado entero | ✅ | ✅ | — | — | pendiente |
-| Calidad JPEG / QoS / prioridad enviadas en caliente | ✅ | ✅ | ✅ | — | pendiente |
+| Calidad JPEG / QoS / prioridad enviadas en caliente | ✅ | ✅ | ✅ | — | ✅ (9-nov) |
+| Perfiles de rendimiento y calidad adaptativa con histéresis | ✅ | ✅ | ✅ | — | pendiente |
 | HUD de métricas y exportación de informe (IPs ocultables, commit, último crash) | ✅ | ✅ (máscara IP) | — | — | pendiente |
 | Luma3DS Input Redirection (UDP 4950, 20 bytes) | ✅ | ✅ (fixtures hex) | ✅ | ✅ (paquetes neutros) | pendiente |
 | Mandos Android: mapeo, perfiles, A/B-X/Y, reasignación, deadzone, ejes por dispositivo, probador | ✅ | ✅ | — | — | pendiente |
@@ -38,8 +43,13 @@ reales; "Emulador" = test instrumentado en Android TV API 31 x86; "Hardware" = N
 | Reliable Stream / RS Delta / Lossless | ❌ (se detectan y se avisa) | ✅ (detección) | ✅ (aviso) | — | — |
 | Audio CSND, juegos DS/DSiWare/GBA, Old 3DS | ❌ no soportado por NTR-HR | | | | |
 
-Tests automáticos (medidos en este commit): `:core` 67 · `:tools:mock-3ds-sender` 23 (red real por loopback) ·
+Tests automáticos: `:core` 86 (+6 benchmarks con `-Pbench`) · `:tools:mock-3ds-sender` 29 (red real por loopback) ·
 `:app` 2 JVM + 2 instrumentados (emulador). Ninguno sustituye a la prueba física.
+
+**Primeras pruebas reales (9-nov-2026):** imagen, audio DSP e Input Redirection configurado funcionan en Chromecast
+con Google TV 4K (Android 14) + New 3DS XL; decodificación 4,4–6,7 ms y recepción→pantalla 5,9–7,5 ms en el
+Chromecast; ≈10 % de frames incompletos por Wi-Fi. Perfiles y calidad adaptativa añadidos para reducir esas pérdidas
+(**pendiente de volver a medir en hardware**).
 
 ## Requisitos
 
