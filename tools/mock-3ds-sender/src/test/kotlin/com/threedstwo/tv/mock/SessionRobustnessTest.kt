@@ -216,4 +216,44 @@ class SessionRobustnessTest {
         val s = session(rec, "300.1.1.1", freeTcpPort())
         assertEquals(ConnectionState.ERROR, s.state)
     }
+
+    @Test fun nonBlockingStopReturnsImmediatelyAndFreesThePort() {
+        val c = console()
+        val port = freeUdpPort()
+        val s = session(Rec(), "127.0.0.1", c.boundControlPort, port = port)
+        assertTrue(waitFor { s.state == ConnectionState.STREAMING })
+        val t0 = System.nanoTime()
+        s.stop(join = false)
+        val ms = (System.nanoTime() - t0) / 1_000_000
+        assertTrue("stop(join=false) took $ms ms", ms < 50)
+        // the port is immediately reusable by the next session
+        val rec2 = Rec()
+        val s2 = session(rec2, "127.0.0.1", c.boundControlPort, port = port)
+        assertTrue(waitFor { s2.state == ConnectionState.STREAMING && rec2.frames.get() > 5 })
+    }
+
+    @Test fun concurrentSettingsUpdatesAreNeverLost() {
+        val c = console()
+        val s = session(Rec(), "127.0.0.1", c.boundControlPort)
+        assertTrue(waitFor { s.state == ConnectionState.STREAMING })
+        // hammer updates from another thread; the LAST one must reach the console
+        for (q in 30..90) s.updateRequest(RemotePlayRequest(jpegQuality = q))
+        assertTrue(waitFor { c.commands.lastOrNull()?.args?.get(1) == 90 })
+        assertTrue(waitFor { !s.requestPending && s.lastSentRequest?.jpegQuality == 90 })
+    }
+
+    @Test fun inputEventToSendLatencyIsMeasuredAndSmall() {
+        val c = FakeNtrConsole(controlPort = freeTcpPort(), inputPort = 0, bindAddress = "127.0.0.1").also { it.start(); cleanups += { it.stop() } }
+        val sender = com.threedstwo.tv.core.input.InputRedirectionSender("127.0.0.1", c.boundInputPort, keepAliveMs = 16)
+        sender.start()
+        cleanups += { sender.stop() }
+        repeat(200) { i ->
+            sender.update(com.threedstwo.tv.core.input.InputFrame(circleX = 0x800 + i), System.nanoTime())
+            Thread.sleep(2)
+        }
+        val p = sender.eventToSendMs.percentiles()!!
+        println("input event->send on JVM: p50=%.3f ms p95=%.3f ms p99=%.3f ms (n=%d)".format(p.p50, p.p95, p.p99, p.count))
+        assertTrue(p.count > 150)
+        assertTrue("p95 ${p.p95} ms", p.p95 < 5.0)
+    }
 }

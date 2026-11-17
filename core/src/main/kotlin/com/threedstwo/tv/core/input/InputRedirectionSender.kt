@@ -26,6 +26,11 @@ class InputRedirectionSender(
     private val lock = Object()
     private var current: InputFrame = InputFrame.NEUTRAL
     private var dirty = true
+    /** System.nanoTime() of the input event that produced [current] (0 = unknown). */
+    private var currentEventNanos = 0L
+
+    /** Input event → datagram written to the socket, in ms (p50/p95/p99). Measures only this device. */
+    val eventToSendMs = com.threedstwo.tv.core.session.WindowStats(256)
     @Volatile private var running = false
     @Volatile private var socket: DatagramSocket? = null
     private var thread: Thread? = null
@@ -51,10 +56,15 @@ class InputRedirectionSender(
         }
     }
 
-    fun update(frame: InputFrame) {
+    /**
+     * New state from the input layer. A change wakes the sender thread at once (no waiting for the
+     * keep-alive tick). [eventNanos] = System.nanoTime() of the originating input event, if known.
+     */
+    fun update(frame: InputFrame, eventNanos: Long = 0L) {
         synchronized(lock) {
             if (frame == current) return
             current = frame
+            currentEventNanos = eventNanos
             dirty = true
             lock.notifyAll()
         }
@@ -75,7 +85,8 @@ class InputRedirectionSender(
             current = InputFrame.NEUTRAL
             lock.notifyAll()
         }
-        thread?.join(500)
+        // No join: the sender thread itself sends the neutral frames and closes the socket, so
+        // this returns immediately (safe on the Android main thread).
         thread = null
     }
 
@@ -84,13 +95,16 @@ class InputRedirectionSender(
         try {
             while (true) {
                 val frame: InputFrame
+                val eventNanos: Long
                 synchronized(lock) {
                     if (running && !dirty) lock.wait(keepAliveMs)
                     if (!running) return
                     frame = current
+                    eventNanos = if (dirty) currentEventNanos else 0L
                     dirty = false
                 }
                 sendRaw(frame.encode(buf))
+                if (eventNanos != 0L) eventToSendMs.add((System.nanoTime() - eventNanos) / 1e6)
             }
         } finally {
             // Make sure the console ends up with every button released.

@@ -11,7 +11,7 @@ import com.threedstwo.tv.core.layout.LayoutSettings
 import com.threedstwo.tv.core.layout.Placement
 import com.threedstwo.tv.core.layout.ScreenLayout
 import com.threedstwo.tv.core.ntr.Screen
-import com.threedstwo.tv.core.session.RunningAverage
+import com.threedstwo.tv.core.session.WindowStats
 
 /**
  * Render thread drawing the latest decoded screens on a SurfaceView with the GPU
@@ -45,7 +45,9 @@ class StreamRenderer(private val buffers: ScreenBuffers) : SurfaceHolder.Callbac
 
     @Volatile var presentedFrames = 0L
         private set
-    val receiveToDisplayMs = RunningAverage(120)
+    val receiveToDisplayMs = WindowStats(240)
+    /** Time the render thread spends from dequeuing the surface buffer to posting it (includes vsync wait). */
+    val drawMs = WindowStats(240)
 
     private var softwareFallbackLogged = false
     private val values = FloatArray(9)
@@ -77,7 +79,7 @@ class StreamRenderer(private val buffers: ScreenBuffers) : SurfaceHolder.Callbac
     fun stop() {
         running = false
         requestRender()
-        thread?.join(1000)
+        thread?.join(300)
     }
 
     fun requestRender() {
@@ -124,6 +126,7 @@ class StreamRenderer(private val buffers: ScreenBuffers) : SurfaceHolder.Callbac
     }
 
     private fun drawOnce() {
+        val drawStart = System.nanoTime()
         synchronized(surfaceLock) {
             val h = holder ?: return
             // Dequeue the surface buffer first (this may wait for vsync) WITHOUT buffers.lock,
@@ -185,7 +188,10 @@ class StreamRenderer(private val buffers: ScreenBuffers) : SurfaceHolder.Callbac
                     java.util.Arrays.fill(drawBmp, null)
                 }
             }
-            if (hadNew) presentedFrames++
+            if (hadNew) {
+                presentedFrames++
+                drawMs.add((System.nanoTime() - drawStart) / 1e6)
+            }
         }
     }
 

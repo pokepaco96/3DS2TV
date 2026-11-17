@@ -14,7 +14,12 @@ import com.threedstwo.tv.core.ntr.NtrConstants
  * Called from the network thread: writes are NON-BLOCKING so audio can never stall video.
  * If more than [maxLatencyMs] are queued (clock drift, burst) incoming frames are dropped to catch up.
  */
-class AudioPlayer(private val maxLatencyMs: Int = 120, private val primeMs: Int = 40) {
+class AudioPlayer(@Volatile var maxLatencyMs: Int = 120, private val primeMs: Int = 40) {
+    /** Partial non-blocking writes (buffer full): the tail of that frame is dropped, never waited for. */
+    @Volatile var partialWrites = 0L
+        private set
+    private var volume = 1f
+    private var lastRecreateNanos = 0L
     private var track: AudioTrack? = null
     private var framesWritten = 0L
     private var playing = false
@@ -30,6 +35,7 @@ class AudioPlayer(private val maxLatencyMs: Int = 120, private val primeMs: Int 
     private val samplesPerMs = NtrConstants.AUDIO_SAMPLE_RATE / 1000.0
 
     @Synchronized fun start(volume: Float) {
+        this.volume = volume
         if (track != null) return
         try {
             val minBuf = AudioTrack.getMinBufferSize(
@@ -67,6 +73,7 @@ class AudioPlayer(private val maxLatencyMs: Int = 120, private val primeMs: Int 
     }
 
     @Synchronized fun setVolume(v: Float) {
+        volume = v
         track?.setVolume(v.coerceIn(0f, 1f))
     }
 
@@ -93,7 +100,29 @@ class AudioPlayer(private val maxLatencyMs: Int = 120, private val primeMs: Int 
 
     private fun writeFrame(t: AudioTrack, buf: ByteArray, off: Int) {
         val n = t.write(buf, off, NtrConstants.AUDIO_FRAME_BYTES, AudioTrack.WRITE_NON_BLOCKING)
-        if (n > 0) framesWritten += n / 4 else if (n == 0) droppedFrames++
+        when {
+            n == NtrConstants.AUDIO_FRAME_BYTES -> framesWritten += n / 4
+            n > 0 -> { // buffer full: keep what fitted, drop the rest (no blocking on the network thread)
+                framesWritten += n / 4
+                partialWrites++
+            }
+            n == 0 -> droppedFrames++
+            n == AudioTrack.ERROR_DEAD_OBJECT -> recreateLater("AudioTrack muerto (cambio de salida de audio/HDMI)")
+            else -> {
+                error = "AudioTrack.write = $n"
+                droppedFrames++
+            }
+        }
+    }
+
+    /** The audio route changed (HDMI/TV): rebuild the track, at most once per second. */
+    private fun recreateLater(reason: String) {
+        val now = System.nanoTime()
+        if (now - lastRecreateNanos < 1_000_000_000L) return
+        lastRecreateNanos = now
+        AppLog.w("Audio: $reason; recreando")
+        stop()
+        start(volume)
     }
 
     @Synchronized fun stop() {

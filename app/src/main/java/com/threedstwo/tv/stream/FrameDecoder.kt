@@ -7,7 +7,7 @@ import com.threedstwo.tv.core.ntr.Downsample
 import com.threedstwo.tv.core.ntr.JpegHeader
 import com.threedstwo.tv.core.ntr.FrameMailbox
 import com.threedstwo.tv.core.ntr.Screen
-import com.threedstwo.tv.core.session.RunningAverage
+import com.threedstwo.tv.core.session.WindowStats
 
 /**
  * Decoder thread: takes the newest JPEG per screen from [FrameMailbox], decodes it with
@@ -20,7 +20,7 @@ class FrameDecoder(
 ) {
     @Volatile private var running = false
     private var thread: Thread? = null
-    val decodeMs = RunningAverage(120)
+    val decodeMs = WindowStats(240)
     @Volatile var decoded = 0L
         private set
     @Volatile var errors = 0L
@@ -46,7 +46,7 @@ class FrameDecoder(
     fun stop() {
         running = false
         mailbox.wakeUp()
-        thread?.join(1000)
+        thread?.join(300)
     }
 
     private fun loop() {

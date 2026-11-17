@@ -4,6 +4,7 @@ import android.app.Activity
 import android.hardware.input.InputManager
 import android.net.ConnectivityManager
 import android.net.Network
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -61,7 +62,7 @@ import java.util.Locale
 /**
  * Full-screen session: NTR-HR video -> decode -> compose on the TV; gamepad -> Luma3DS input redirection.
  */
-class StreamActivity : Activity(), NtrSession.Listener, InputManager.InputDeviceListener {
+class StreamActivity : Activity(), InputManager.InputDeviceListener {
     private lateinit var app: ThreeDsTvApp
     private lateinit var settings: AppSettings
     private val main = Handler(Looper.getMainLooper())
@@ -118,7 +119,15 @@ class StreamActivity : Activity(), NtrSession.Listener, InputManager.InputDevice
 
     private fun buildViews() {
         val root = FrameLayout(this)
-        surface = SurfaceView(this)
+        surface = SurfaceView(this).apply {
+            isFocusable = true
+            isFocusableInTouchMode = true
+            // Android batches joystick MotionEvents to the next vsync (up to ~16 ms of input lag).
+            // Unbuffered dispatch delivers each stick/trigger change immediately (API 30+).
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                requestUnbufferedDispatch(InputDevice.SOURCE_CLASS_JOYSTICK)
+            }
+        }
         surface.holder.addCallback(renderer)
         root.addView(surface, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
 
@@ -312,7 +321,8 @@ class StreamActivity : Activity(), NtrSession.Listener, InputManager.InputDevice
         buffers.clear()
         mailbox.clear()
         AppLog.i("Sesión: modo=${cfg.mode} consola=${ip ?: "(aprender)"} puerto UDP=${cfg.viewerPort} calidad=${cfg.request.jpegQuality} QoS=${cfg.request.qosMbps}Mbps audio=${cfg.request.audio}")
-        session = NtrSession(cfg, this).also { it.start() }
+        val gen = ++sessionGen
+        session = NtrSession(cfg, SessionCallbacks(gen)).also { it.start() }
         applyAudio()
         applyInputRedirection()
     }
@@ -324,7 +334,8 @@ class StreamActivity : Activity(), NtrSession.Listener, InputManager.InputDevice
         if (session != null) app.lastStats = buildStats(refreshRates = false)
         sender?.stop()
         sender = null
-        session?.stop()
+        sessionGen++ // late callbacks of the old session are ignored from here on
+        session?.stop(join = false) // sockets closed now; threads exit on their own (no UI wait)
         session = null
         audio.stop()
     }
@@ -369,30 +380,41 @@ class StreamActivity : Activity(), NtrSession.Listener, InputManager.InputDevice
 
     // ------------------------------------------------------------------ session callbacks (background threads)
 
-    override fun onStateChanged(state: ConnectionState, detail: String?) {
-        AppLog.i("Estado: ${state.label}${detail?.let { " — $it" } ?: ""}")
-        main.post { renderState(state, detail) }
-    }
+    /** Generation of the current session: callbacks of a stopped session are ignored (stop() no longer joins its threads). */
+    @Volatile private var sessionGen = 0
 
-    override fun onVideoFrame(info: VideoFrameInfo, data: ByteArray, length: Int) {
-        if (info.screen == Screen.TOP) framesTop++ else framesBottom++
-        mailbox.offer(info, data, length)
-    }
+    private inner class SessionCallbacks(private val gen: Int) : NtrSession.Listener {
+        private fun current() = gen == sessionGen
 
-    override fun onAudioFrame(pcm: ByteArray, offset: Int, silenceFramesBefore: Int) {
-        audio.write(pcm, offset, silenceFramesBefore)
-    }
-
-    override fun onConsoleAddressLearned(ip: String) {
-        AppLog.i("Consola detectada en $ip")
-        main.post {
-            update { it.copy(consoleIp = ip) }
-            applyInputRedirection()
-            showToast("Consola detectada: $ip")
+        override fun onStateChanged(state: ConnectionState, detail: String?) {
+            if (!current()) return
+            AppLog.i("Estado: ${state.label}${detail?.let { " — $it" } ?: ""}")
+            main.post { if (current()) renderState(state, detail) }
         }
-    }
 
-    override fun onLog(message: String) = AppLog.i(message)
+        override fun onVideoFrame(info: VideoFrameInfo, data: ByteArray, length: Int) {
+            if (!current()) return
+            if (info.screen == Screen.TOP) framesTop++ else framesBottom++
+            mailbox.offer(info, data, length)
+        }
+
+        override fun onAudioFrame(pcm: ByteArray, offset: Int, silenceFramesBefore: Int) {
+            if (current()) audio.write(pcm, offset, silenceFramesBefore)
+        }
+
+        override fun onConsoleAddressLearned(ip: String) {
+            if (!current()) return
+            AppLog.i("Consola detectada en $ip")
+            main.post {
+                if (!current()) return@post
+                update { it.copy(consoleIp = ip) }
+                applyInputRedirection()
+                showToast("Consola detectada: $ip")
+            }
+        }
+
+        override fun onLog(message: String) = AppLog.i(message)
+    }
 
     private fun renderState(state: ConnectionState, detail: String?) {
         if (state == ConnectionState.STREAMING) {
@@ -466,7 +488,7 @@ class StreamActivity : Activity(), NtrSession.Listener, InputManager.InputDevice
             return super.dispatchKeyEvent(event)
         }
         if (isGamepad && tracker.onKey(event)) {
-            onPadChanged()
+            onPadChanged(eventNanos(event.eventTime))
             return true
         }
         // TV remote / keyboard
@@ -496,7 +518,7 @@ class StreamActivity : Activity(), NtrSession.Listener, InputManager.InputDevice
 
     override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
         if (!menuVisible && tracker.onMotion(event)) {
-            onPadChanged()
+            onPadChanged(eventNanos(event.eventTime))
             return true
         }
         return super.dispatchGenericMotionEvent(event)
@@ -509,7 +531,11 @@ class StreamActivity : Activity(), NtrSession.Listener, InputManager.InputDevice
     }
 
     /** Maps the current controller state and sends it (called on every input event and every tick). */
-    private fun onPadChanged() {
+    /** Android event time (uptimeMillis, same monotonic clock) -> System.nanoTime() domain. */
+    private fun eventNanos(eventUptimeMs: Long): Long =
+        System.nanoTime() - (SystemClock.uptimeMillis() - eventUptimeMs).coerceAtLeast(0) * 1_000_000
+
+    private fun onPadChanged(eventNanos: Long = 0L) {
         if (menuVisible) return
         var pad = padSnapshot()
         val s = settings
@@ -555,7 +581,7 @@ class StreamActivity : Activity(), NtrSession.Listener, InputManager.InputDevice
         } else comboStart = 0L
 
         renderer.cursorPressed = r.app.touchPressed && cursorMode
-        sender?.update(r.frame)
+        sender?.update(r.frame, eventNanos)
     }
 
     private fun setCursorMode(on: Boolean) {
@@ -646,6 +672,15 @@ class StreamActivity : Activity(), NtrSession.Listener, InputManager.InputDevice
         netCallback = null
     }
 
+    /** Settings chosen in 3DS2TV vs. what was actually written to NTR-HR (it never acknowledges). */
+    private fun requestState(s: NtrSession?): String {
+        if (s == null) return "—"
+        if (s.config.mode == ConnectMode.PASSIVE) return "modo pasivo: ajustes en la 3DS"
+        val sent = s.lastSentRequest ?: return "sin TCP: calidad/QoS no aplicadas"
+        val base = "calidad ${sent.jpegQuality} · QoS ${sent.qosMbps} Mbps" + if (sent.audio) " · audio" else ""
+        return if (s.requestPending) "$base (cambio pendiente)" else "$base enviada"
+    }
+
     private fun buildStats(refreshRates: Boolean = true): StreamStats {
         val s = session
         val now = System.nanoTime()
@@ -680,11 +715,18 @@ class StreamActivity : Activity(), NtrSession.Listener, InputManager.InputDevice
             framesDroppedBeforeDecode = mailbox.droppedBeforeDecode,
             framesDecodeErrors = decoder?.errors ?: 0,
             invalidPackets = st?.invalidPackets ?: 0,
-            decodeMsAvg = decoder?.decodeMs?.average(),
-            receiveToDisplayMsAvg = renderer.receiveToDisplayMs.average(),
+            decodeMsAvg = decoder?.decodeMs?.percentiles()?.p50,
+            receiveToDisplayMsAvg = renderer.receiveToDisplayMs.percentiles()?.p50,
             audio = audioState,
             input = inputState,
             controller = controller,
+            decodeP95Ms = decoder?.decodeMs?.percentiles()?.p95,
+            drawP95Ms = renderer.drawMs.percentiles()?.p95,
+            receiveToDisplayP95Ms = renderer.receiveToDisplayMs.percentiles()?.p95,
+            inputSendP50Ms = sender?.eventToSendMs?.percentiles()?.p50,
+            inputSendP95Ms = sender?.eventToSendMs?.percentiles()?.p95,
+            requestState = requestState(s),
+            stalePackets = st?.stalePackets ?: 0,
         )
     }
 
@@ -712,7 +754,10 @@ class StreamActivity : Activity(), NtrSession.Listener, InputManager.InputDevice
             appendLine("FPS mostrados (frames nuevos) ${f(st.displayedFps)}")
             appendLine("Bitrate ${f(st.kbps)} kbit/s")
             appendLine("Frames incompletos ${st.framesIncomplete}  descartados ${st.framesDroppedBeforeDecode}  errores ${st.framesDecodeErrors}")
-            appendLine("Decodificación ${f(st.decodeMsAvg)} ms  ·  recepción→pantalla ${f(st.receiveToDisplayMsAvg)} ms")
+            appendLine("Decodificación p50 ${f(st.decodeMsAvg)} / p95 ${f(st.decodeP95Ms)} ms  ·  dibujo p95 ${f(st.drawP95Ms)} ms")
+            appendLine("Recepción→pantalla p50 ${f(st.receiveToDisplayMsAvg)} / p95 ${f(st.receiveToDisplayP95Ms)} ms  ·  frames viejos descartados ${st.stalePackets}")
+            appendLine("Mando→envío p50 ${f(st.inputSendP50Ms)} / p95 ${f(st.inputSendP95Ms)} ms (solo este dispositivo)")
+            appendLine("NTR-HR: ${st.requestState}")
             appendLine("Audio: ${st.audio}")
             appendLine("Input: ${st.input}")
             append("Mando: ${st.controller}")

@@ -78,7 +78,17 @@ class NtrSession(
     @Volatile private var running = false
     @Volatile private var lastVideoNanos = 0L
     @Volatile private var consoleAddress: InetAddress? = null
-    @Volatile private var pendingRequest: RemotePlayRequest? = null
+    /** Request waiting to be sent; getAndSet(null) on the control thread so a concurrent update is never lost. */
+    private val pendingRequest = java.util.concurrent.atomic.AtomicReference<RemotePlayRequest?>(null)
+
+    /** Last Remote Play request actually written to the TCP socket (NTR has no acknowledgement). */
+    @Volatile var lastSentRequest: RemotePlayRequest? = null
+        private set
+    @Volatile var lastSentAtNanos = 0L
+        private set
+
+    /** True while a settings change has been accepted locally but not yet written to the console. */
+    val requestPending: Boolean get() = pendingRequest.get() != null
     @Volatile private var udpSocket: DatagramSocket? = null
     /** Socket of the TCP connection being opened or in use, closed by [stop] to unblock the control thread. */
     @Volatile private var controlSocket: Socket? = null
@@ -136,7 +146,12 @@ class NtrSession(
         }
     }
 
-    fun stop() {
+    /**
+     * Stops the session. Sockets are closed immediately (the UDP port is free for a new session at
+     * once). With [join] = false (Android main thread) the threads are NOT waited for: they exit by
+     * themselves within one socket timeout, and callers must ignore late callbacks (generation id).
+     */
+    fun stop(join: Boolean = true) {
         synchronized(lock) {
             if (!running) return
             running = false
@@ -146,11 +161,13 @@ class NtrSession(
         udpSocket?.close()
         controlSocket?.let { try { it.close() } catch (_: IOException) {} }
         controlThread?.interrupt()
-        try {
-            udpThread?.join(500)
-            controlThread?.join(500)
-        } catch (_: InterruptedException) {
-            Thread.currentThread().interrupt()
+        if (join) {
+            try {
+                udpThread?.join(500)
+                controlThread?.join(500)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+            }
         }
         udpSocket = null
         setState(ConnectionState.DISCONNECTED, null)
@@ -159,7 +176,7 @@ class NtrSession(
     /** Applies new quality/priority settings; re-sent to the console on the live TCP connection. */
     fun updateRequest(request: RemotePlayRequest) {
         config = config.copy(request = request.copy(viewerPort = config.viewerPort))
-        pendingRequest = config.request
+        pendingRequest.set(config.request)
     }
 
     fun consoleIp(): String? = consoleAddress?.hostAddress
@@ -403,6 +420,14 @@ class NtrSession(
         false
     }
 
+    private fun sendRequest(c: Control, r: RemotePlayRequest): Boolean {
+        if (!send(c, r.toPacket(c.seq++))) return false
+        diagnostics.remotePlayCommands++
+        lastSentRequest = r
+        lastSentAtNanos = System.nanoTime()
+        return true
+    }
+
     private fun runControl(c: Control): Outcome {
         val alive = java.util.concurrent.atomic.AtomicBoolean(true)
         val reader = Thread({
@@ -444,9 +469,8 @@ class NtrSession(
         }, "ntr-tcp-reader").apply { isDaemon = true; start() }
 
         try {
-            pendingRequest = null
-            if (!send(c, config.request.toPacket(c.seq++))) return Outcome.LOST
-            diagnostics.remotePlayCommands++
+            pendingRequest.set(null)
+            if (!sendRequest(c, config.request)) return Outcome.LOST
             val sentAt = System.nanoTime()
             var resent = false
             var lastHeartbeat = System.nanoTime()
@@ -466,15 +490,12 @@ class NtrSession(
                     if (!resent && waited >= config.firstFrameRetryMs) {
                         resent = true
                         log("Sin vídeo todavía; reenviando orden Remote Play")
-                        if (!send(c, config.request.toPacket(c.seq++))) return Outcome.NO_VIDEO
-                        diagnostics.remotePlayCommands++
+                        if (!sendRequest(c, config.request)) return Outcome.NO_VIDEO
                     }
                     if (waited >= config.firstFrameTimeoutMs) return Outcome.NO_VIDEO
                 }
-                pendingRequest?.let {
-                    pendingRequest = null
-                    if (!send(c, it.toPacket(c.seq++))) return if (everStreamed) Outcome.LOST else Outcome.NO_VIDEO
-                    diagnostics.remotePlayCommands++
+                pendingRequest.getAndSet(null)?.let {
+                    if (!sendRequest(c, it)) return if (everStreamed) Outcome.LOST else Outcome.NO_VIDEO
                 }
                 if ((now - lastHeartbeat) / 1_000_000 >= config.heartbeatIntervalMs) {
                     lastHeartbeat = now

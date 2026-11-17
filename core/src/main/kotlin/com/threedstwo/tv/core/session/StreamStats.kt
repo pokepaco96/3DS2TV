@@ -36,6 +36,15 @@ data class StreamStats(
     val audio: String,
     val input: String,
     val controller: String,
+    val decodeP95Ms: Double? = null,
+    val drawP95Ms: Double? = null,
+    val receiveToDisplayP95Ms: Double? = null,
+    /** Input event -> datagram sent (this device only), p50/p95. */
+    val inputSendP50Ms: Double? = null,
+    val inputSendP95Ms: Double? = null,
+    /** e.g. "calidad 80 · QoS 12 Mbps enviada" / "pendiente" / "sin TCP". */
+    val requestState: String = "",
+    val stalePackets: Long = 0,
 )
 
 /** Fixed-size running average without allocation. */
